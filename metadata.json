@@ -1,0 +1,6 @@
+{
+  "name": "Fleet Management Dashboard",
+  "description": "Modern Fleet Management Dashboard for tracking logistics trucks, vehicle telemetry, drivers, geofencing, fuel analytics, refuel history, and alerts.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
