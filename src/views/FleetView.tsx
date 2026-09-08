@@ -12,10 +12,12 @@ import {
   Maximize2,
   Columns2,
   Table as TableIcon,
-  Clock
+  Clock,
+  Cpu
 } from 'lucide-react';
-import { Vehicle, VehicleStatus, Driver, AreaGeofence, RouteGeofence } from '../types';
+import { Vehicle, VehicleStatus, Driver, AreaGeofence, RouteGeofence, RfidHardwareState } from '../types';
 import { LeafletMap } from '../components/LeafletMap';
+import { SpduinoImuToolbar } from '../components/SpduinoImuToolbar';
 
 interface FleetViewProps {
   vehicles: Vehicle[];
@@ -27,6 +29,10 @@ interface FleetViewProps {
   onToggleIgnition?: (vehicleId: string) => void;
   searchQuery?: string;
   onSearchChange?: (query: string) => void;
+  activeImuVehicleId?: string;
+  setActiveImuVehicleId?: (id: string) => void;
+  onNotifyToast?: (type: 'success' | 'error' | 'warning', title: string, message: string) => void;
+  rfidGlobalState: RfidHardwareState;
 }
 
 export const FleetView: React.FC<FleetViewProps> = ({
@@ -37,7 +43,11 @@ export const FleetView: React.FC<FleetViewProps> = ({
   selectedVehicle,
   onSelectVehicle,
   onToggleIgnition,
-  searchQuery = ''
+  searchQuery = '',
+  activeImuVehicleId = 'veh-1',
+  setActiveImuVehicleId,
+  onNotifyToast,
+  rfidGlobalState
 }) => {
   const [statusFilter, setStatusFilter] = useState<'All' | VehicleStatus>('All');
   const [layoutMode, setLayoutMode] = useState<'split' | 'map' | 'list'>('split');
@@ -121,6 +131,17 @@ export const FleetView: React.FC<FleetViewProps> = ({
 
   return (
     <div className="space-y-5">
+      {/* SPDuino & GY-521 IMU Real-Time Hardware Control Bar */}
+      <SpduinoImuToolbar
+        selectedVehicle={selectedVehicle}
+        vehicles={vehicles}
+        drivers={drivers}
+        activeVehicleId={activeImuVehicleId}
+        setActiveVehicleId={setActiveImuVehicleId || (() => {})}
+        onNotifyToast={onNotifyToast}
+        rfidGlobalState={rfidGlobalState}
+      />
+
       {/* STATUS FILTER CARDS / BUTTONS AT THE TOP (per user prompt) */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
         {/* All Vehicles */}
@@ -381,14 +402,26 @@ export const FleetView: React.FC<FleetViewProps> = ({
                         - whether ignition is on or off */}
                     <div className="grid grid-cols-3 gap-2 py-2 border-y border-slate-700/50 text-xs">
                       <div>
-                        <span className="text-slate-400 text-[11px] block">Current Speed</span>
-                        <span
-                          className={`font-mono font-bold text-sm ${
-                            vehicle.currentSpeed > 0 ? 'text-emerald-400' : 'text-slate-300'
-                          }`}
-                        >
-                          {vehicle.currentSpeed} km/h
-                        </span>
+                        <div className="flex items-center justify-between">
+                          <span className="text-slate-400 text-[11px] block">Current Speed</span>
+                          {vehicle.id === activeImuVehicleId && (
+                            <span className="text-[9px] font-bold text-emerald-400 bg-emerald-950/80 px-1 py-0.2 rounded border border-emerald-800">
+                              IMU SIMULATED
+                            </span>
+                          )}
+                        </div>
+                        <div className="flex items-baseline gap-1 mt-0.5">
+                          <span
+                            className={`font-mono font-bold text-sm ${
+                              vehicle.currentSpeed > 0 ? 'text-emerald-400' : 'text-slate-300'
+                            }`}
+                          >
+                            {vehicle.currentSpeed} km/h
+                          </span>
+                          {vehicle.id === activeImuVehicleId && (
+                            <span className="text-[9px] text-slate-500 font-mono hidden sm:inline">(GY-521)</span>
+                          )}
+                        </div>
                       </div>
 
                       <div>

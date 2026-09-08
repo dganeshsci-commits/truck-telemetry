@@ -11,9 +11,11 @@ import {
   CheckCircle2,
   X,
   Sparkles,
-  ArrowRight
+  ArrowRight,
+  Clock
 } from 'lucide-react';
-import { Driver, Vehicle, DriverStatus } from '../types';
+import { Driver, Vehicle, DriverStatus, RfidHardwareState, AlertEvent } from '../types';
+import { RfidHardwareTestSection } from '../components/RfidHardwareTestSection';
 
 interface DriversViewProps {
   drivers: Driver[];
@@ -24,6 +26,10 @@ interface DriversViewProps {
   onAssignVehicle?: (driverId: string, vehicleId?: string) => void;
   onAssignRfid?: (driverId: string, vehicleId: string) => void;
   onSelectVehicle?: (vehicle: Vehicle) => void;
+  onUpdateVehicle?: (vehicle: Vehicle) => void;
+  onTriggerAlert?: (alert: AlertEvent) => void;
+  onNotifyToast?: (type: 'success' | 'error' | 'warning', title: string, message: string) => void;
+  rfidGlobalState: RfidHardwareState;
 }
 
 export const DriversView: React.FC<DriversViewProps> = ({
@@ -34,19 +40,16 @@ export const DriversView: React.FC<DriversViewProps> = ({
   onDeleteDriver,
   onAssignVehicle,
   onAssignRfid,
-  onSelectVehicle
+  onSelectVehicle,
+  onUpdateVehicle,
+  onTriggerAlert,
+  onNotifyToast,
+  rfidGlobalState
 }) => {
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<'All' | DriverStatus>('All');
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [selectedDriver, setSelectedDriver] = useState<Driver | null>(null);
-
-  // RFID Tap Simulation State
-  const [isRfidSimulatorOpen, setIsRfidSimulatorOpen] = useState(false);
-  const [simulatedRfid, setSimulatedRfid] = useState('RFID102934');
-  const [targetVehicleId, setTargetVehicleId] = useState(vehicles[0]?.id || '');
-  const [rfidSuccessMsg, setRfidSuccessMsg] = useState<string | null>(null);
-  const [rfidErrorMsg, setRfidErrorMsg] = useState<string | null>(null);
 
   // Add driver form state
   const [newDriver, setNewDriver] = useState<Partial<Driver>>({
@@ -54,7 +57,7 @@ export const DriversView: React.FC<DriversViewProps> = ({
     name: '',
     phone: '',
     rfidId: `RFID${Math.floor(100000 + Math.random() * 900000)}`,
-    status: 'Active',
+    status: 'Inactive',
     licenseNumber: '',
     experienceYears: 5,
     assignedVehicleId: ''
@@ -63,11 +66,16 @@ export const DriversView: React.FC<DriversViewProps> = ({
   const filteredDrivers = drivers.filter((d) => {
     if (statusFilter !== 'All' && d.status !== statusFilter) return false;
     const q = search.toLowerCase();
+    const dRfid = (d.rfidUid || d.rfidId || '').toLowerCase();
+    const dName = (d.driverName || d.name || '').toLowerCase();
+    const dId = (d.driverId || d.id || '').toLowerCase();
+    const dVeh = (d.assignedVehicle || '').toLowerCase();
     return (
-      d.name.toLowerCase().includes(q) ||
-      d.id.toLowerCase().includes(q) ||
-      d.rfidId.toLowerCase().includes(q) ||
-      d.phone.includes(q)
+      dName.includes(q) ||
+      dId.includes(q) ||
+      dRfid.includes(q) ||
+      d.phone.includes(q) ||
+      dVeh.includes(q)
     );
   });
 
@@ -77,11 +85,15 @@ export const DriversView: React.FC<DriversViewProps> = ({
 
     const created: Driver = {
       id: newDriver.id || `DRV00${drivers.length + 1}`,
+      driverId: newDriver.id || `DRV00${drivers.length + 1}`,
       name: newDriver.name,
+      driverName: newDriver.name,
       phone: newDriver.phone,
       assignedVehicleId: newDriver.assignedVehicleId || undefined,
+      assignedVehicle: vehicles.find((v) => v.id === newDriver.assignedVehicleId)?.plateNumber,
       rfidId: newDriver.rfidId || `RFID${Math.floor(100000 + Math.random() * 900000)}`,
-      status: (newDriver.status as DriverStatus) || 'Active',
+      rfidUid: newDriver.rfidId || `RFID${Math.floor(100000 + Math.random() * 900000)}`,
+      status: (newDriver.status as DriverStatus) || 'Inactive',
       licenseNumber: newDriver.licenseNumber || 'TN-NEW-LIC',
       experienceYears: Number(newDriver.experienceYears) || 3,
       joinedDate: 'Just now',
@@ -96,73 +108,66 @@ export const DriversView: React.FC<DriversViewProps> = ({
       name: '',
       phone: '',
       rfidId: `RFID${Math.floor(100000 + Math.random() * 900000)}`,
-      status: 'Active',
+      status: 'Inactive',
       licenseNumber: '',
       experienceYears: 5,
       assignedVehicleId: ''
     });
   };
 
-  // Simulate RFID Tap Assignment
-  const handleSimulateRfidTap = () => {
-    setRfidErrorMsg(null);
-    setRfidSuccessMsg(null);
+  const handleToggleStatus = (driver: Driver) => {
+    const nextStatus: DriverStatus = driver.status === 'Active' ? 'Inactive' : 'Active';
+    const timestamp = new Date().toLocaleTimeString();
+    const updated: Driver = {
+      ...driver,
+      status: nextStatus,
+      loginTime: nextStatus === 'Active' ? (driver.loginTime || timestamp) : driver.loginTime,
+      lastRfidScan: timestamp
+    };
+    onUpdateDriver(updated);
 
-    const matchedDriver = drivers.find(
-      (d) => d.rfidId.trim().toUpperCase() === simulatedRfid.trim().toUpperCase()
-    );
-
-    if (!matchedDriver) {
-      setRfidErrorMsg(`No driver found registered with RFID token: ${simulatedRfid}`);
-      return;
+    // Also toggle assigned vehicle status if deactivating
+    if (nextStatus === 'Inactive' && onUpdateVehicle) {
+      const assignedVeh = vehicles.find(
+        (v) => v.id === driver.assignedVehicleId || v.assignedDriverId === driver.id
+      );
+      if (assignedVeh) {
+        onUpdateVehicle({
+          ...assignedVeh,
+          status: 'Ignition Off',
+          ignition: false,
+          currentSpeed: 0
+        });
+      }
     }
-
-    const targetVehicle = vehicles.find((v) => v.id === targetVehicleId);
-    if (!targetVehicle) {
-      setRfidErrorMsg('Please select a target vehicle from the dropdown.');
-      return;
-    }
-
-    // Assign
-    if (onAssignRfid) {
-      onAssignRfid(matchedDriver.id, targetVehicle.id);
-    } else if (onAssignVehicle) {
-      onAssignVehicle(matchedDriver.id, targetVehicle.id);
-    }
-    setRfidSuccessMsg(
-      `✓ RFID Tap Verified: Driver ${matchedDriver.name} (${matchedDriver.rfidId}) successfully assigned to ${targetVehicle.plateNumber}`
-    );
-
-    setTimeout(() => {
-      setRfidSuccessMsg(null);
-    }, 5000);
   };
 
   return (
     <div className="space-y-6">
-      {/* Top Header Controls */}
+      {/* 1. REAL-TIME RFID HARDWARE TESTING SECTION */}
+      <RfidHardwareTestSection
+        drivers={drivers}
+        vehicles={vehicles}
+        onUpdateDriver={onUpdateDriver}
+        onUpdateVehicle={onUpdateVehicle || (() => {})}
+        onTriggerAlert={onTriggerAlert || (() => {})}
+        onNotifyToast={onNotifyToast}
+        rfidGlobalState={rfidGlobalState}
+      />
+
+      {/* 2. Top Header Controls for Drivers Roster */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-slate-900/80 p-4 rounded-xl border border-slate-800">
         <div>
           <h2 className="text-base font-bold text-white flex items-center gap-2">
             <Users className="w-5 h-5 text-blue-400" />
-            <span>Driver Roster & RFID Credentials</span>
+            <span>Driver Roster & Vehicle Assignments</span>
           </h2>
           <p className="text-xs text-slate-400">
-            Manage commercial fleet drivers, track assignments, and simulate hardware RFID tap-in.
+            Commercial fleet personnel records, registered RFID contactless tags, and live login state.
           </p>
         </div>
 
         <div className="flex items-center gap-2.5">
-          {/* RFID Tap Simulator Button */}
-          <button
-            id="open-rfid-simulator-btn"
-            onClick={() => setIsRfidSimulatorOpen(!isRfidSimulatorOpen)}
-            className="px-3.5 py-2 rounded-lg text-xs font-semibold bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 border border-indigo-500/30 flex items-center gap-1.5 transition-colors"
-          >
-            <Radio className="w-4 h-4 text-indigo-400" />
-            <span>RFID Tap Simulator</span>
-          </button>
-
           {/* Add Driver Button */}
           <button
             id="add-driver-btn"
@@ -175,91 +180,13 @@ export const DriversView: React.FC<DriversViewProps> = ({
         </div>
       </div>
 
-      {/* RFID Simulation Panel (when opened) */}
-      {isRfidSimulatorOpen && (
-        <div className="p-4 rounded-xl bg-gradient-to-r from-indigo-950/60 to-slate-900 border border-indigo-800/60 shadow-xl space-y-3">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2 text-indigo-300 text-sm font-bold">
-              <CreditCard className="w-4 h-4" />
-              <span>Simulate Driver Self-Assignment via RFID Tap</span>
-            </div>
-            <button
-              onClick={() => setIsRfidSimulatorOpen(false)}
-              className="text-slate-400 hover:text-white text-xs"
-            >
-              ✕ Close
-            </button>
-          </div>
-          <p className="text-xs text-slate-300">
-            In physical fleet operations, drivers tap their contactless RFID keyfob on the in-cabin telematics reader to claim a truck. Select an RFID card and vehicle to test:
-          </p>
-
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-            <div>
-              <label className="block text-[11px] text-slate-400 mb-1">Select Driver RFID</label>
-              <select
-                value={simulatedRfid}
-                onChange={(e) => setSimulatedRfid(e.target.value)}
-                className="w-full px-3 py-1.5 text-xs bg-slate-900 border border-slate-700 rounded-lg text-slate-200 focus:ring-1 focus:ring-indigo-500 font-mono"
-              >
-                {drivers.map((d) => (
-                  <option key={d.id} value={d.rfidId}>
-                    {d.name} ({d.rfidId})
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div>
-              <label className="block text-[11px] text-slate-400 mb-1">In-Cabin Reader on Vehicle</label>
-              <select
-                value={targetVehicleId}
-                onChange={(e) => setTargetVehicleId(e.target.value)}
-                className="w-full px-3 py-1.5 text-xs bg-slate-900 border border-slate-700 rounded-lg text-slate-200 focus:ring-1 focus:ring-indigo-500 font-mono"
-              >
-                {vehicles.map((v) => (
-                  <option key={v.id} value={v.id}>
-                    {v.plateNumber} - {v.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div className="flex items-end">
-              <button
-                id="execute-rfid-tap-btn"
-                onClick={handleSimulateRfidTap}
-                className="w-full py-1.5 px-3 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 shadow-md shadow-indigo-600/30 transition-colors"
-              >
-                <Radio className="w-3.5 h-3.5" />
-                <span>Tap RFID Card</span>
-              </button>
-            </div>
-          </div>
-
-          {rfidSuccessMsg && (
-            <div className="p-2.5 rounded-lg bg-emerald-950/60 border border-emerald-800 text-emerald-300 text-xs flex items-center gap-2 animate-fadeIn">
-              <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-400" />
-              <span>{rfidSuccessMsg}</span>
-            </div>
-          )}
-
-          {rfidErrorMsg && (
-            <div className="p-2.5 rounded-lg bg-rose-950/60 border border-rose-800 text-rose-300 text-xs flex items-center gap-2 animate-fadeIn">
-              <X className="w-4 h-4 shrink-0 text-rose-400" />
-              <span>{rfidErrorMsg}</span>
-            </div>
-          )}
-        </div>
-      )}
-
       {/* Filter and Search Bar */}
       <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 bg-slate-800/40 p-3 rounded-xl border border-slate-700/60">
         <div className="relative flex-1 max-w-md">
           <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
           <input
             type="text"
-            placeholder="Search driver by name, ID, phone, or RFID..."
+            placeholder="Search driver by name, ID, phone, RFID UID, or vehicle plate..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             className="w-full pl-9 pr-3 py-1.5 text-xs rounded-lg bg-slate-900 border border-slate-700 text-slate-200 placeholder-slate-400 focus:outline-none focus:ring-1 focus:ring-blue-500"
@@ -283,26 +210,35 @@ export const DriversView: React.FC<DriversViewProps> = ({
         </div>
       </div>
 
-      {/* Driver List Table */}
+      {/* Driver List Table with Exact 10 Required Columns (Req 13) */}
       <div className="bg-slate-900/90 rounded-xl border border-slate-800 shadow-xl overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-left text-xs">
             <thead className="bg-slate-950/80 text-slate-400 uppercase tracking-wider font-semibold border-b border-slate-800">
               <tr>
-                <th className="py-3.5 px-4">Driver Name & ID</th>
-                <th className="py-3.5 px-4">RFID Token</th>
-                <th className="py-3.5 px-4">Phone</th>
-                <th className="py-3.5 px-4">Assigned Vehicle</th>
-                <th className="py-3.5 px-4">Status</th>
-                <th className="py-3.5 px-4">Safety Score</th>
+                <th className="py-3.5 px-3">Driver ID</th>
+                <th className="py-3.5 px-4">Driver Name</th>
+                <th className="py-3.5 px-3">RFID UID</th>
+                <th className="py-3.5 px-3">Phone</th>
+                <th className="py-3.5 px-3">Assigned Vehicle</th>
+                <th className="py-3.5 px-3">Status</th>
+                <th className="py-3.5 px-3">Safety Score</th>
+                <th className="py-3.5 px-3">Login Time</th>
+                <th className="py-3.5 px-3">Last RFID Scan</th>
                 <th className="py-3.5 px-4 text-right">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-800/70">
               {filteredDrivers.map((driver) => {
                 const assignedVehicle = vehicles.find(
-                  (v) => v.id === driver.assignedVehicleId || v.driverId === driver.id
+                  (v) =>
+                    v.id === driver.assignedVehicleId ||
+                    v.driverId === driver.id ||
+                    v.plateNumber.toUpperCase() === (driver.assignedVehicle || '').toUpperCase()
                 );
+
+                const rfidToken = driver.rfidUid || driver.rfidId;
+                const vehiclePlate = assignedVehicle ? assignedVehicle.plateNumber : (driver.assignedVehicle || 'Unassigned');
 
                 return (
                   <tr
@@ -310,23 +246,31 @@ export const DriversView: React.FC<DriversViewProps> = ({
                     className="hover:bg-slate-800/50 transition-colors cursor-pointer"
                     onClick={() => setSelectedDriver(driver)}
                   >
-                    <td className="py-3.5 px-4">
-                      <div className="font-bold text-sm text-white">{driver.name}</div>
-                      <div className="text-[11px] font-mono text-slate-400">ID: {driver.id}</div>
+                    {/* 1. Driver ID */}
+                    <td className="py-3.5 px-3 font-mono font-bold text-slate-300">
+                      {driver.id}
                     </td>
 
+                    {/* 2. Driver Name */}
                     <td className="py-3.5 px-4">
-                      <span className="font-mono text-xs text-blue-300 bg-blue-950/60 border border-blue-800/50 px-2 py-0.5 rounded">
-                        {driver.rfidId}
+                      <div className="font-bold text-white text-sm">{driver.name}</div>
+                      <div className="text-[10px] text-slate-400">Lic: {driver.licenseNumber}</div>
+                    </td>
+
+                    {/* 3. RFID UID */}
+                    <td className="py-3.5 px-3">
+                      <span className="font-mono text-xs text-blue-300 bg-blue-950/70 border border-blue-800/60 px-2 py-0.5 rounded inline-block">
+                        {rfidToken}
                       </span>
                     </td>
 
-                    <td className="py-3.5 px-4 text-slate-300 font-mono">
+                    {/* 4. Phone */}
+                    <td className="py-3.5 px-3 text-slate-300 font-mono">
                       {driver.phone}
                     </td>
 
-                    <td className="py-3.5 px-4" onClick={(e) => e.stopPropagation()}>
-                      {/* Changeable Vehicle Assignment directly from Dashboard per prompt */}
+                    {/* 5. Assigned Vehicle */}
+                    <td className="py-3.5 px-3" onClick={(e) => e.stopPropagation()}>
                       <select
                         value={assignedVehicle?.id || ''}
                         onChange={(e) => {
@@ -337,37 +281,50 @@ export const DriversView: React.FC<DriversViewProps> = ({
                             onAssignRfid(driver.id, val);
                           }
                         }}
-                        className="px-2.5 py-1 text-xs bg-slate-800 border border-slate-700 rounded-lg text-slate-200 focus:ring-1 focus:ring-blue-500 font-mono"
+                        className="px-2 py-1 text-xs bg-slate-800 border border-slate-700 rounded-lg text-slate-200 focus:ring-1 focus:ring-blue-500 font-mono"
                       >
-                        <option value="">Unassigned</option>
+                        <option value="">{driver.assignedVehicle || 'Unassigned'}</option>
                         {vehicles.map((v) => (
                           <option key={v.id} value={v.id}>
-                            {v.plateNumber} ({v.type})
+                            {v.plateNumber}
                           </option>
                         ))}
                       </select>
                     </td>
 
-                    <td className="py-3.5 px-4">
+                    {/* 6. Status */}
+                    <td className="py-3.5 px-3">
                       <span
-                        className={`px-2 py-0.5 rounded-full text-[11px] font-semibold border ${
+                        className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-semibold border ${
                           driver.status === 'Active'
                             ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/40'
                             : driver.status === 'On Duty'
                             ? 'bg-blue-500/20 text-blue-400 border-blue-500/40'
                             : driver.status === 'Resting'
                             ? 'bg-amber-500/20 text-amber-400 border-amber-500/40'
-                            : 'bg-slate-500/20 text-slate-400 border-slate-500/40'
+                            : 'bg-slate-700/40 text-slate-400 border-slate-700'
                         }`}
                       >
-                        {driver.status}
+                        <span
+                          className={`w-1.5 h-1.5 rounded-full ${
+                            driver.status === 'Active'
+                              ? 'bg-emerald-400 animate-pulse'
+                              : driver.status === 'On Duty'
+                              ? 'bg-blue-400'
+                              : driver.status === 'Resting'
+                              ? 'bg-amber-400'
+                              : 'bg-slate-500'
+                          }`}
+                        />
+                        <span>{driver.status}</span>
                       </span>
                     </td>
 
-                    <td className="py-3.5 px-4">
-                      <div className="flex items-center gap-2">
+                    {/* 7. Safety Score */}
+                    <td className="py-3.5 px-3">
+                      <div className="flex items-center gap-1.5">
                         <span className="font-bold text-emerald-400">{driver.safetyScore}%</span>
-                        <div className="w-16 h-1.5 bg-slate-800 rounded-full overflow-hidden">
+                        <div className="w-12 h-1.5 bg-slate-800 rounded-full overflow-hidden">
                           <div
                             className="h-full bg-emerald-500 rounded-full"
                             style={{ width: `${driver.safetyScore}%` }}
@@ -376,13 +333,39 @@ export const DriversView: React.FC<DriversViewProps> = ({
                       </div>
                     </td>
 
+                    {/* 8. Login Time */}
+                    <td className="py-3.5 px-3 font-mono text-slate-400">
+                      {driver.loginTime || '--------'}
+                    </td>
+
+                    {/* 9. Last RFID Scan */}
+                    <td className="py-3.5 px-3 font-mono text-slate-400">
+                      {driver.lastRfidScan || '--------'}
+                    </td>
+
+                    {/* 10. Actions */}
                     <td className="py-3.5 px-4 text-right" onClick={(e) => e.stopPropagation()}>
-                      <button
-                        onClick={() => setSelectedDriver(driver)}
-                        className="px-3 py-1 rounded text-xs bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition-colors"
-                      >
-                        View
-                      </button>
+                      <div className="flex items-center justify-end gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => handleToggleStatus(driver)}
+                          className={`px-2 py-1 rounded text-[11px] font-semibold border transition-colors ${
+                            driver.status === 'Active'
+                              ? 'bg-slate-800 hover:bg-slate-700 text-rose-300 border-slate-700'
+                              : 'bg-emerald-950/60 hover:bg-emerald-900 text-emerald-300 border-emerald-800'
+                          }`}
+                          title={driver.status === 'Active' ? 'Deactivate session' : 'Activate driver'}
+                        >
+                          {driver.status === 'Active' ? 'Deactivate' : 'Activate'}
+                        </button>
+
+                        <button
+                          onClick={() => setSelectedDriver(driver)}
+                          className="px-2.5 py-1 rounded text-[11px] bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition-colors"
+                        >
+                          View
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 );
@@ -531,7 +514,7 @@ export const DriversView: React.FC<DriversViewProps> = ({
               <div className="p-3 bg-slate-800/60 rounded-xl border border-slate-700/60">
                 <span className="text-slate-400 block mb-1">RFID Token</span>
                 <span className="font-mono font-bold text-blue-400 text-sm">
-                  {selectedDriver.rfidId}
+                  {selectedDriver.rfidUid || selectedDriver.rfidId}
                 </span>
               </div>
 
@@ -539,6 +522,20 @@ export const DriversView: React.FC<DriversViewProps> = ({
                 <span className="text-slate-400 block mb-1">Phone Number</span>
                 <span className="font-mono font-bold text-slate-200 text-sm">
                   {selectedDriver.phone}
+                </span>
+              </div>
+
+              <div className="p-3 bg-slate-800/60 rounded-xl border border-slate-700/60">
+                <span className="text-slate-400 block mb-1">Login Time</span>
+                <span className="font-mono text-emerald-400 text-xs font-bold">
+                  {selectedDriver.loginTime || 'Not Logged In'}
+                </span>
+              </div>
+
+              <div className="p-3 bg-slate-800/60 rounded-xl border border-slate-700/60">
+                <span className="text-slate-400 block mb-1">Last RFID Scan</span>
+                <span className="font-mono text-blue-300 text-xs">
+                  {selectedDriver.lastRfidScan || 'No Scans Recorded'}
                 </span>
               </div>
 
@@ -557,7 +554,7 @@ export const DriversView: React.FC<DriversViewProps> = ({
               </div>
             </div>
 
-            {/* Driver Status Update & Historical Logs per requirement */}
+            {/* Driver Status Update & Historical Logs */}
             <div className="grid grid-cols-2 gap-3 text-xs">
               <div className="p-3 bg-slate-800/80 rounded-xl border border-slate-700">
                 <span className="text-slate-400 font-semibold block mb-1">Update Driver Status:</span>
@@ -583,28 +580,6 @@ export const DriversView: React.FC<DriversViewProps> = ({
                 <div className="flex items-center gap-2 mt-1">
                   <span className="font-bold text-emerald-400 text-base">{selectedDriver.safetyScore}%</span>
                   <span className="text-[10px] text-slate-400">Zero speeding violations</span>
-                </div>
-              </div>
-            </div>
-
-            {/* Historical Trips & Data Support */}
-            <div className="p-3 bg-slate-950/60 rounded-xl border border-slate-800 text-xs space-y-2">
-              <div className="flex items-center justify-between text-slate-400 font-semibold border-b border-slate-800 pb-1.5">
-                <span>Trip & Assignment History</span>
-                <span className="text-[10px] text-slate-500 font-mono">Last 3 Recorded</span>
-              </div>
-              <div className="space-y-1.5 text-[11px]">
-                <div className="flex justify-between items-center text-slate-300">
-                  <span>NH48 Freight Corridor (340 km)</span>
-                  <span className="text-emerald-400 font-mono">Completed • 99% score</span>
-                </div>
-                <div className="flex justify-between items-center text-slate-400">
-                  <span>Chennai Port Gate 4 to Sriperumbudur (45 km)</span>
-                  <span className="text-slate-400 font-mono">Completed</span>
-                </div>
-                <div className="flex justify-between items-center text-slate-400">
-                  <span>Ambattur Inland Depot to Ennore Terminal (38 km)</span>
-                  <span className="text-slate-400 font-mono">Completed</span>
                 </div>
               </div>
             </div>

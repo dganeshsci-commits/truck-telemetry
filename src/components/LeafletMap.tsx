@@ -38,6 +38,8 @@ export const LeafletMap: React.FC<LeafletMapProps> = ({
   const geofencesLayerRef = useRef<L.LayerGroup | null>(null);
   const routesLayerRef = useRef<L.LayerGroup | null>(null);
   const drawingLayerRef = useRef<L.LayerGroup | null>(null);
+  const markersByVehicleIdRef = useRef<Map<string, { marker: L.Marker; key: string }>>(new Map());
+  const prevSelectedVehIdRef = useRef<string | null>(null);
 
   // Status colors & styles
   const getStatusColor = (status: Vehicle['status']) => {
@@ -177,24 +179,44 @@ export const LeafletMap: React.FC<LeafletMapProps> = ({
     };
   }, []);
 
-  // Update vehicle markers
+  // Update vehicle markers incrementally without destroying and recreating DOM nodes
   useEffect(() => {
     if (!mapInstanceRef.current || !markersLayerRef.current) return;
 
-    markersLayerRef.current.clearLayers();
+    const layer = markersLayerRef.current;
+    const currentMarkers = markersByVehicleIdRef.current;
+    const activeIds = new Set<string>();
 
     vehicles.forEach((vehicle) => {
       if (!vehicle || !vehicle.coordinates || typeof vehicle.coordinates.lat !== 'number' || typeof vehicle.coordinates.lng !== 'number') {
         return;
       }
+      activeIds.add(vehicle.id);
       const { lat, lng } = vehicle.coordinates;
       const isSelected = selectedVehicle?.id === vehicle.id;
       const style = getStatusColor(vehicle.status);
 
-      // Create rich HTML marker
+      // Stable marker cache key based on visual attributes
+      const markerKey = `${lat.toFixed(5)}_${lng.toFixed(5)}_${vehicle.status}_${vehicle.heading || 0}_${isSelected}`;
+
+      const existing = currentMarkers.get(vehicle.id);
+
+      if (existing) {
+        // If nothing changed visually, do not touch DOM
+        if (existing.key === markerKey) {
+          return;
+        }
+
+        // Only update position if moved
+        const curLatLng = existing.marker.getLatLng();
+        if (Math.abs(curLatLng.lat - lat) > 0.00001 || Math.abs(curLatLng.lng - lng) > 0.00001) {
+          existing.marker.setLatLng([lat, lng]);
+        }
+      }
+
+      // Create HTML marker
       const markerHtml = `
         <div class="relative flex flex-col items-center group cursor-pointer" style="transform: translate(-50%, -50%);">
-          <!-- Status indicator ring -->
           <div class="relative flex items-center justify-center ${
             style.pulse ? 'pulse-moving' : ''
           }" style="
@@ -206,7 +228,6 @@ export const LeafletMap: React.FC<LeafletMapProps> = ({
             box-shadow: 0 4px 12px rgba(0,0,0,0.5);
             transition: all 0.2s ease;
           ">
-            <!-- Truck svg icon with heading -->
             <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="color: ${style.textColor}; transform: rotate(${vehicle.heading || 0}deg);">
               <path d="M10 17h4V5H2v12h3m9 0h2.5a2.5 2.5 0 0 0 2.5-2.5V10l-3-4h-2" />
               <circle cx="7.5" cy="17.5" r="2.5" />
@@ -214,7 +235,6 @@ export const LeafletMap: React.FC<LeafletMapProps> = ({
             </svg>
           </div>
 
-          <!-- Mini Plate pill label -->
           <div class="mt-1 px-1.5 py-0.5 rounded text-[10px] font-mono font-bold whitespace-nowrap shadow-md ${
             isSelected
               ? 'bg-blue-600 text-white border border-blue-400'
@@ -232,81 +252,83 @@ export const LeafletMap: React.FC<LeafletMapProps> = ({
         iconAnchor: [20, 28]
       });
 
-      const marker = L.marker([lat, lng], { icon: customIcon });
+      if (existing) {
+        existing.marker.setIcon(customIcon);
+        existing.key = markerKey;
+      } else {
+        const marker = L.marker([lat, lng], { icon: customIcon });
 
-      // Interactive popup
-      const popupHtml = `
-        <div class="p-3.5 bg-slate-900 text-slate-100 rounded-xl min-w-[220px] font-sans border border-slate-700">
-          <div class="flex items-center justify-between border-b border-slate-800 pb-2 mb-2">
-            <div>
-              <span class="text-xs font-mono font-bold text-blue-400">${vehicle.plateNumber}</span>
-              <p class="text-[11px] text-slate-400">${vehicle.name}</p>
-            </div>
-            <span class="px-2 py-0.5 rounded-full text-[10px] font-semibold text-white" style="background-color: ${style.bg}">
-              ${vehicle.status}
-            </span>
-          </div>
-
-          <div class="space-y-1.5 text-xs">
-            <div class="flex justify-between">
-              <span class="text-slate-400">Speed:</span>
-              <span class="font-bold ${vehicle.currentSpeed > 0 ? 'text-emerald-400' : 'text-slate-300'}">${vehicle.currentSpeed} km/h</span>
-            </div>
-            <div class="flex justify-between">
-              <span class="text-slate-400">Ignition:</span>
-              <span class="font-semibold ${vehicle.ignition ? 'text-emerald-400' : 'text-slate-400'}">
-                ${vehicle.ignition ? 'ON' : 'OFF'}
+        const popupHtml = `
+          <div class="p-3.5 bg-slate-900 text-slate-100 rounded-xl min-w-[220px] font-sans border border-slate-700">
+            <div class="flex items-center justify-between border-b border-slate-800 pb-2 mb-2">
+              <div>
+                <span class="text-xs font-mono font-bold text-blue-400">${vehicle.plateNumber}</span>
+                <p class="text-[11px] text-slate-400">${vehicle.name}</p>
+              </div>
+              <span class="px-2 py-0.5 rounded-full text-[10px] font-semibold text-white" style="background-color: ${style.bg}">
+                ${vehicle.status}
               </span>
             </div>
-            <div class="flex justify-between">
-              <span class="text-slate-400">Fuel Level:</span>
-              <span class="font-bold ${vehicle.fuelLevel < 25 ? 'text-rose-400' : 'text-slate-200'}">
-                ${vehicle.fuelLevel}% (${vehicle.currentFuelLiters} L)
-              </span>
+            <div class="space-y-1.5 text-xs">
+              <div class="flex justify-between">
+                <span class="text-slate-400">Speed:</span>
+                <span class="font-bold text-slate-200">${vehicle.currentSpeed} km/h</span>
+              </div>
+              <div class="flex justify-between">
+                <span class="text-slate-400">Ignition:</span>
+                <span class="font-semibold ${vehicle.ignition ? 'text-emerald-400' : 'text-slate-400'}">
+                  ${vehicle.ignition ? 'ON' : 'OFF'}
+                </span>
+              </div>
+              <div class="flex justify-between">
+                <span class="text-slate-400">Fuel Level:</span>
+                <span class="font-bold text-slate-200">${vehicle.fuelLevel}%</span>
+              </div>
+              <div class="text-[11px] text-slate-400 pt-1 border-t border-slate-800/80 truncate">
+                📍 ${vehicle.lastKnownLocation}
+              </div>
             </div>
-            <div class="flex justify-between">
-              <span class="text-slate-400">State Duration:</span>
-              <span class="font-mono text-slate-300">${vehicle.statusDuration}</span>
-            </div>
-            <div class="text-[11px] text-slate-400 pt-1 border-t border-slate-800/80 truncate">
-              📍 ${vehicle.lastKnownLocation}
-            </div>
+            <button id="view-details-${vehicle.id}" class="mt-3 w-full py-1.5 px-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-xs font-medium transition-colors text-center block">
+              Open Telemetry Details →
+            </button>
           </div>
+        `;
 
-          <button id="view-details-${vehicle.id}" class="mt-3 w-full py-1.5 px-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-xs font-medium transition-colors text-center block">
-            Open Telemetry Details →
-          </button>
-        </div>
-      `;
+        marker.bindPopup(popupHtml, { closeButton: false });
+        marker.on('click', () => onSelectVehicle(vehicle));
+        marker.on('popupopen', () => {
+          const btn = document.getElementById(`view-details-${vehicle.id}`);
+          if (btn) btn.onclick = () => onSelectVehicle(vehicle);
+        });
 
-      marker.bindPopup(popupHtml, { closeButton: false });
-
-      marker.on('click', () => {
-        onSelectVehicle(vehicle);
-      });
-
-      marker.on('popupopen', () => {
-        const btn = document.getElementById(`view-details-${vehicle.id}`);
-        if (btn) {
-          btn.onclick = () => {
-            onSelectVehicle(vehicle);
-          };
-        }
-      });
-
-      markersLayerRef.current?.addLayer(marker);
+        layer.addLayer(marker);
+        currentMarkers.set(vehicle.id, { marker, key: markerKey });
+      }
     });
-  }, [vehicles, selectedVehicle, onSelectVehicle]);
 
-  // Handle selected vehicle flyTo
+    // Remove deleted vehicle markers
+    for (const [vId, entry] of currentMarkers.entries()) {
+      if (!activeIds.has(vId)) {
+        layer.removeLayer(entry.marker);
+        currentMarkers.delete(vId);
+      }
+    }
+  }, [vehicles, selectedVehicle?.id, onSelectVehicle]);
+
+  // Handle selected vehicle flyTo (ONLY once when user explicitly selects a vehicle)
   useEffect(() => {
     if (!mapInstanceRef.current || !selectedVehicle) return;
 
+    if (prevSelectedVehIdRef.current === selectedVehicle.id) {
+      return; // Already centered on this vehicle, prevent camera shaking
+    }
+
+    prevSelectedVehIdRef.current = selectedVehicle.id;
     const { lat, lng } = selectedVehicle.coordinates;
     mapInstanceRef.current.flyTo([lat, lng], 13, {
-      duration: 1.2
+      duration: 1.0
     });
-  }, [selectedVehicle]);
+  }, [selectedVehicle?.id]);
 
   // Render Area Geofences
   useEffect(() => {

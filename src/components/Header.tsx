@@ -5,7 +5,9 @@ import {
   RefreshCw,
   Search,
   Wifi,
-  Sparkles
+  Radio,
+  Sparkles,
+  Usb
 } from 'lucide-react';
 import { ActiveNavTab } from '../types';
 
@@ -18,6 +20,11 @@ interface HeaderProps {
   onNavigateToNotifications: () => void;
   searchQuery: string;
   onSearchChange: (query: string) => void;
+  rfidStatus?: 'LIVE_HARDWARE' | 'SIMULATION' | 'DISCONNECTED';
+  onNavigateToDrivers?: () => void;
+  onToggleHardware?: () => void;
+  isHardwareConnected?: boolean;
+  isHardwareConnecting?: boolean;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -28,7 +35,12 @@ export const Header: React.FC<HeaderProps> = ({
   unreadAlertsCount,
   onNavigateToNotifications,
   searchQuery,
-  onSearchChange
+  onSearchChange,
+  rfidStatus = 'DISCONNECTED',
+  onNavigateToDrivers,
+  onToggleHardware,
+  isHardwareConnected = false,
+  isHardwareConnecting = false
 }) => {
   const getTabTitle = () => {
     switch (activeTab) {
@@ -88,6 +100,26 @@ export const Header: React.FC<HeaderProps> = ({
           />
         </div>
 
+        {/* Global Hardware Connection Toggle */}
+        <button
+          id="global-hardware-connect-btn"
+          onClick={onToggleHardware}
+          disabled={isHardwareConnecting}
+          title={isHardwareConnected ? "Disconnect SPDuino Hardware" : "Connect SPDuino Hardware (RFID + IMU)"}
+          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all border shadow-lg active:scale-95 ${
+            isHardwareConnected
+              ? 'bg-emerald-950/40 text-emerald-400 border-emerald-500/50 shadow-emerald-500/10'
+              : isHardwareConnecting
+              ? 'bg-slate-800 text-slate-400 border-slate-700 animate-pulse'
+              : 'bg-indigo-600 hover:bg-indigo-500 text-white border-indigo-500 shadow-indigo-500/20'
+          }`}
+        >
+          <Usb className={`w-3.5 h-3.5 ${isHardwareConnected ? 'text-emerald-400' : 'text-white'}`} />
+          <span>
+            {isHardwareConnecting ? 'Connecting...' : isHardwareConnected ? 'SPDuino Active' : 'Connect Hardware'}
+          </span>
+        </button>
+
         {/* Simulate GPS / Telemetry Ping */}
         <button
           id="simulate-ping-btn"
@@ -124,6 +156,37 @@ export const Header: React.FC<HeaderProps> = ({
           <Wifi className="w-3 h-3 text-emerald-400" />
           <span>MQTT: CONNECTED</span>
         </div>
+
+        {/* RFID Hardware status badge */}
+        <button
+          type="button"
+          onClick={() => onNavigateToDrivers?.()}
+          className={`hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[11px] font-mono transition-colors ${
+            rfidStatus === 'LIVE_HARDWARE'
+              ? 'bg-emerald-950/80 border-emerald-700/80 text-emerald-300 shadow-[0_0_10px_rgba(52,211,153,0.2)]'
+              : rfidStatus === 'SIMULATION'
+              ? 'bg-indigo-950/80 border-indigo-700/80 text-indigo-300'
+              : 'bg-slate-800/80 border-slate-700/80 text-slate-400 hover:text-slate-300'
+          }`}
+          title="Click to open Drivers & RFID Hardware Test"
+        >
+          <Radio
+            className={`w-3 h-3 ${
+              rfidStatus === 'LIVE_HARDWARE'
+                ? 'text-emerald-400 animate-pulse'
+                : rfidStatus === 'SIMULATION'
+                ? 'text-indigo-400'
+                : 'text-slate-500'
+            }`}
+          />
+          <span>
+            {rfidStatus === 'LIVE_HARDWARE'
+              ? 'RFID: LIVE CONNECTED'
+              : rfidStatus === 'SIMULATION'
+              ? 'RFID: SIMULATION'
+              : 'RFID: STANDBY'}
+          </span>
+        </button>
       </div>
     </header>
   );

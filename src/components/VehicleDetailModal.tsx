@@ -17,6 +17,7 @@ import {
   ArrowUpRight
 } from 'lucide-react';
 import { Vehicle, Driver, AreaGeofence, RouteGeofence } from '../types';
+import { VehicleDynamicsSection } from './VehicleDynamicsSection';
 
 interface VehicleDetailModalProps {
   vehicle: Vehicle | null;
@@ -29,6 +30,7 @@ interface VehicleDetailModalProps {
   onToggleIgnition?: (vehicleId: string) => void;
   onNavigateToFuel?: (vehicleId: string) => void;
   onNavigateToDriver?: () => void;
+  isLinkedToImu?: boolean;
 }
 
 export const VehicleDetailModal: React.FC<VehicleDetailModalProps> = ({
@@ -41,7 +43,8 @@ export const VehicleDetailModal: React.FC<VehicleDetailModalProps> = ({
   onUpdateVehicle,
   onToggleIgnition,
   onNavigateToFuel,
-  onNavigateToDriver
+  onNavigateToDriver,
+  isLinkedToImu = false
 }) => {
   const [activeSubTab, setActiveSubTab] = useState<'overview' | 'telemetry' | 'geofence'>('overview');
 
@@ -170,6 +173,11 @@ export const VehicleDetailModal: React.FC<VehicleDetailModalProps> = ({
                     <Gauge className="w-3.5 h-3.5 text-blue-400" />
                     Current Speed
                   </span>
+                  {isLinkedToImu && (
+                    <span className="text-[10px] font-bold text-emerald-400 bg-emerald-950/80 px-1.5 py-0.5 rounded border border-emerald-800/80">
+                      IMU SIMULATED
+                    </span>
+                  )}
                 </div>
                 <div className="flex items-baseline gap-1">
                   <span className="text-2xl font-bold font-mono text-white">
@@ -177,6 +185,11 @@ export const VehicleDetailModal: React.FC<VehicleDetailModalProps> = ({
                   </span>
                   <span className="text-xs text-slate-400">km/h</span>
                 </div>
+                {isLinkedToImu && (
+                  <p className="text-[10px] text-emerald-400/90 font-mono mt-0.5">
+                    Source: IMU Simulated Speed
+                  </p>
+                )}
                 <div className="mt-2 w-full h-1 bg-slate-700 rounded-full overflow-hidden">
                   <div
                     className={`h-full rounded-full ${
@@ -186,7 +199,7 @@ export const VehicleDetailModal: React.FC<VehicleDetailModalProps> = ({
                         ? 'bg-emerald-500'
                         : 'bg-slate-600'
                     }`}
-                    style={{ width: `${Math.min(100, (vehicle.currentSpeed / 100) * 100)}%` }}
+                    style={{ width: `${Math.min(100, (vehicle.currentSpeed / 80) * 100)}%` }}
                   />
                 </div>
               </div>
@@ -242,6 +255,12 @@ export const VehicleDetailModal: React.FC<VehicleDetailModalProps> = ({
                 </div>
               </div>
             </div>
+
+            {/* Compact Vehicle Dynamics Section for GY-521 MPU6050 IMU */}
+            <VehicleDynamicsSection
+              vehiclePlate={vehicle.plateNumber}
+              isLinkedToImu={isLinkedToImu}
+            />
 
             {/* Current Location per prompt */}
             <div className="p-4 rounded-xl bg-slate-800/60 border border-slate-700/60 space-y-2">

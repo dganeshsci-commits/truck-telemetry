@@ -1,14 +1,21 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import {
+  CheckCircle2,
+  AlertTriangle,
+  X
+} from 'lucide-react';
 import {
   ActiveNavTab,
   Vehicle,
+  VehicleStatus,
   Driver,
   AreaGeofence,
   RouteGeofence,
   AlertRule,
   AlertEvent,
   RefuelEvent,
-  FuelDrainEvent
+  FuelDrainEvent,
+  RfidHardwareState
 } from './types';
 import {
   INITIAL_VEHICLES,
@@ -21,6 +28,8 @@ import {
   INITIAL_DRAIN_EVENTS,
   simulateTelemetryTick
 } from './mockData';
+import { rfidSerialManager } from './services/rfidSerial';
+import { imuSpeedController } from './services/imuSpeedController';
 import { Sidebar } from './components/Sidebar';
 import { Header } from './components/Header';
 import { VehicleDetailModal } from './components/VehicleDetailModal';
@@ -49,8 +58,274 @@ export default function App() {
   const [refuelEvents, setRefuelEvents] = useState<RefuelEvent[]>(INITIAL_REFUEL_EVENTS);
   const [drainEvents, setDrainEvents] = useState<FuelDrainEvent[]>(INITIAL_DRAIN_EVENTS);
 
-  // Selected vehicle for modal inspection
-  const [selectedVehicle, setSelectedVehicle] = useState<Vehicle | null>(null);
+  // RFID Hardware State
+  const [rfidGlobalState, setRfidGlobalState] = useState<RfidHardwareState>({
+    spduinoConnected: false,
+    rc522Ready: false,
+    usbSerialConnected: false,
+    portName: 'Not Connected',
+    baudRate: 115200,
+    lastRfidUid: '--------',
+    lastScanTime: '--------',
+    currentMode: 'DISCONNECTED',
+    error: null,
+    diagnostics: {
+      imuSampleRate: 0,
+      packetCount: 0,
+      rfidCount: 0,
+      errorCount: 0,
+      lastMessage: 'No messages received',
+      uptimeSeconds: 0
+    }
+  });
+
+  // Periodically sync diagnostics from serial manager
+  useEffect(() => {
+    const timer = setInterval(() => {
+      if (rfidSerialManager.isConnected()) {
+        const diag = rfidSerialManager.getDiagnostics();
+        setRfidGlobalState(prev => ({
+          ...prev,
+          spduinoConnected: diag.status === 'CONNECTED',
+          usbSerialConnected: diag.status === 'CONNECTED',
+          diagnostics: {
+            imuSampleRate: diag.imuSampleRate,
+            packetCount: diag.packetCount,
+            rfidCount: diag.rfidCount,
+            errorCount: diag.errorCount,
+            lastMessage: diag.lastMessage,
+            uptimeSeconds: diag.uptimeSeconds
+          }
+        }));
+      }
+    }, 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  // Floating Toast Notification for RFID Authentication Feedback
+  const [rfidToast, setRfidToast] = useState<{
+    id: string;
+    type: 'success' | 'error' | 'warning';
+    title: string;
+    message: string;
+  } | null>(null);
+
+  const handleNotifyToast = useCallback((type: 'success' | 'error' | 'warning', title: string, message: string) => {
+    const id = `toast-${Date.now()}`;
+    setRfidToast({ id, type, title, message });
+    setTimeout(() => {
+      setRfidToast((curr) => (curr?.id === id ? null : curr));
+    }, 6000);
+  }, []);
+
+  const handleUpdateVehicle = useCallback((updated: Vehicle) => {
+    setVehicles((prev) => prev.map((v) => (v.id === updated.id ? updated : v)));
+  }, []);
+
+  // Selected vehicle for modal inspection (derived to prevent infinite re-render loops)
+  const [selectedVehicleId, setSelectedVehicleId] = useState<string | null>(null);
+  const selectedVehicle = useMemo(
+    () => vehicles.find((v) => v.id === selectedVehicleId) || null,
+    [vehicles, selectedVehicleId]
+  );
+  const setSelectedVehicle = useCallback((v: Vehicle | null) => {
+    setSelectedVehicleId(v ? v.id : null);
+  }, []);
+
+  // Active vehicle currently bound to the GY-521 IMU & SPDuino controller (Default: veh-1 TN-01-AB-4821)
+  const [activeImuVehicleId, setActiveImuVehicleId] = useState<string>('veh-1');
+
+  // Stable references to prevent listener re-attaching on each render
+  const driversRef = useRef(drivers);
+  driversRef.current = drivers;
+  const vehiclesRef = useRef(vehicles);
+  vehiclesRef.current = vehicles;
+  const lastRfidScanRef = useRef<{ uid: string; timestamp: number }>({ uid: '', timestamp: 0 });
+
+  // Listen to GY-521 IMU Speed Controller updates and drive the active vehicle's speed and status
+  useEffect(() => {
+    const unsubscribe = imuSpeedController.subscribe((_imuData, newSpeed) => {
+      setVehicles((prev) => {
+        const target = prev.find((v) => v.id === activeImuVehicleId);
+        if (!target) return prev;
+
+        const newStatus: VehicleStatus =
+          newSpeed > 0
+            ? 'Moving'
+            : target.ignition
+            ? 'Idling'
+            : 'Ignition Off';
+
+        // Strict bail out: if speed and status haven't changed, do NOT create a new array
+        if (target.currentSpeed === newSpeed && target.status === newStatus) {
+          return prev;
+        }
+
+        return prev.map((v) => {
+          if (v.id === activeImuVehicleId) {
+            return {
+              ...v,
+              currentSpeed: newSpeed,
+              status: newStatus,
+              statusDuration: v.status !== newStatus ? '00:00:01' : v.statusDuration,
+              lastUpdated: 'Just now'
+            };
+          }
+          return v;
+        });
+      });
+    });
+
+    return () => unsubscribe();
+  }, [activeImuVehicleId]);
+
+  // 2. Unified SPDuino Hardware Serial Listener for simultaneous RC522 RFID & GY-521 IMU streams
+  useEffect(() => {
+    const unsubLines = rfidSerialManager.addListener((rawLine) => {
+      // a. Send all data packets to IMU Speed Controller (ACCEL, GYRO, TILT packets)
+      imuSpeedController.handleSerialLine(rawLine);
+
+      // b. Check for RFID UID scan packet
+      const clean = rawLine.trim().toUpperCase();
+      if (clean.startsWith('RFID,') || clean.startsWith('UID:') || clean.startsWith('CARD:')) {
+        const parts = rawLine.split(/[,:]/);
+        const scannedUid = parts.slice(1).join(' ').trim();
+        const normalizedScan = scannedUid.toUpperCase().replace(/[\s:]/g, '');
+
+        if (!normalizedScan) return;
+
+        // Debounce repeated card reads within 3 seconds
+        const now = Date.now();
+        if (
+          lastRfidScanRef.current.uid === normalizedScan &&
+          now - lastRfidScanRef.current.timestamp < 3000
+        ) {
+          return;
+        }
+        lastRfidScanRef.current = { uid: normalizedScan, timestamp: now };
+
+        const currentDrivers = driversRef.current;
+        const currentVehicles = vehiclesRef.current;
+
+        // Find matching driver in database
+        const matchedDriver = currentDrivers.find(
+          (d) => d.rfidId.toUpperCase().replace(/[\s:]/g, '') === normalizedScan
+        );
+
+        if (matchedDriver) {
+          // Find driver's vehicle
+          const targetVeh =
+            currentVehicles.find(
+              (v) => v.id === matchedDriver.assignedVehicleId || v.assignedDriverId === matchedDriver.id
+            ) || currentVehicles[0];
+
+          if (targetVeh) {
+            setActiveImuVehicleId(targetVeh.id);
+            setSelectedVehicleId(targetVeh.id);
+            setVehicles((prev) =>
+              prev.map((v) =>
+                v.id === targetVeh.id
+                  ? {
+                      ...v,
+                      ignition: true,
+                      status: v.currentSpeed > 0 ? 'Moving' : 'Idling',
+                      assignedDriverId: matchedDriver.id,
+                      assignedDriverName: matchedDriver.name
+                    }
+                  : v
+              )
+            );
+
+            handleNotifyToast(
+              'success',
+              'RFID AUTHENTICATION VERIFIED',
+              `Driver ${matchedDriver.name} authenticated (UID: ${scannedUid}). Vehicle ${targetVeh.plateNumber} activated & linked to GY-521 IMU.`
+            );
+          }
+        } else {
+          handleNotifyToast(
+            'error',
+            'RFID AUTHENTICATION FAILED',
+            `Unknown RFID card detected (UID: ${scannedUid}). Vehicle activation denied.`
+          );
+        }
+      }
+    });
+
+    const unsubDisconnect = rfidSerialManager.addDisconnectListener((reason) => {
+      setRfidGlobalState((prev) => ({
+        ...prev,
+        spduinoConnected: false,
+        rc522Ready: false,
+        usbSerialConnected: false,
+        portName: 'Disconnected',
+        currentMode: 'DISCONNECTED',
+        error: reason
+      }));
+      handleNotifyToast('warning', 'SPDuino Disconnected', reason);
+    });
+
+    return () => {
+      unsubLines();
+      unsubDisconnect();
+    };
+  }, [handleNotifyToast]);
+
+  // Global Connection Handlers
+  const [isHardwareConnecting, setIsHardwareConnecting] = useState(false);
+
+  const handleConnectHardware = useCallback(async (baudRate: number = 115200) => {
+    setRfidGlobalState(prev => ({ ...prev, error: null, currentMode: 'DISCONNECTED' }));
+    setIsHardwareConnecting(true);
+    const res = await rfidSerialManager.connect(baudRate);
+    setIsHardwareConnecting(false);
+    
+    if (res.success) {
+      setRfidGlobalState((prev) => ({
+        ...prev,
+        spduinoConnected: true,
+        rc522Ready: true,
+        usbSerialConnected: true,
+        portName: res.portLabel,
+        baudRate,
+        currentMode: 'LIVE_HARDWARE',
+        error: null
+      }));
+      return true;
+    } else {
+      setRfidGlobalState((prev) => ({
+        ...prev,
+        spduinoConnected: false,
+        rc522Ready: false,
+        usbSerialConnected: false,
+        portName: 'Not Connected',
+        currentMode: 'DISCONNECTED',
+        error: res.error || 'Connection failed'
+      }));
+      return false;
+    }
+  }, []);
+
+  const handleDisconnectHardware = useCallback(async () => {
+    await rfidSerialManager.disconnect();
+    setRfidGlobalState((prev) => ({
+      ...prev,
+      spduinoConnected: false,
+      rc522Ready: false,
+      usbSerialConnected: false,
+      portName: 'Not Connected',
+      currentMode: 'DISCONNECTED',
+      error: null
+    }));
+  }, []);
+
+  const handleToggleHardware = useCallback(async () => {
+    if (rfidGlobalState.spduinoConnected) {
+      await handleDisconnectHardware();
+    } else {
+      await handleConnectHardware(rfidGlobalState.baudRate || 115200);
+    }
+  }, [rfidGlobalState.spduinoConnected, rfidGlobalState.baudRate, handleConnectHardware, handleDisconnectHardware]);
 
   // Unread alerts count
   const unreadAlertsCount = alertHistory.filter((a) => a.status === 'New').length;
@@ -59,7 +334,7 @@ export default function App() {
   const handleSimulatePing = useCallback(() => {
     setIsSimulating(true);
     setVehicles((prevVehicles) => {
-      const updated = simulateTelemetryTick(prevVehicles);
+      const updated = simulateTelemetryTick(prevVehicles, activeImuVehicleId);
 
       // Check for fuel threshold triggers or idle triggers
       updated.forEach((v) => {
@@ -115,18 +390,10 @@ export default function App() {
   // Periodic background telemetry updates
   useEffect(() => {
     const timer = setInterval(() => {
-      setVehicles((prev) => simulateTelemetryTick(prev));
+      setVehicles((prev) => simulateTelemetryTick(prev, activeImuVehicleId));
     }, 12000);
     return () => clearInterval(timer);
-  }, []);
-
-  // Update selected vehicle reference if its telemetry updates
-  useEffect(() => {
-    if (selectedVehicle) {
-      const fresh = vehicles.find((v) => v.id === selectedVehicle.id);
-      if (fresh) setSelectedVehicle(fresh);
-    }
-  }, [vehicles, selectedVehicle]);
+  }, [activeImuVehicleId]);
 
   // Vehicle Ignition Toggle (Requirement: "whether ignition is on or off")
   const handleToggleIgnition = (vehicleId: string) => {
@@ -337,6 +604,11 @@ export default function App() {
           onNavigateToNotifications={() => setActiveTab('notifications')}
           searchQuery={searchQuery}
           onSearchChange={setSearchQuery}
+          rfidStatus={rfidGlobalState.currentMode}
+          onNavigateToDrivers={() => setActiveTab('drivers')}
+          onToggleHardware={handleToggleHardware}
+          isHardwareConnected={rfidGlobalState.spduinoConnected}
+          isHardwareConnecting={isHardwareConnecting}
         />
 
         <main className="flex-1 p-4 sm:p-6 lg:p-8 max-w-7xl w-full mx-auto">
@@ -368,6 +640,10 @@ export default function App() {
               onSearchChange={setSearchQuery}
               areaGeofences={areaGeofences}
               routeGeofences={routeGeofences}
+              activeImuVehicleId={activeImuVehicleId}
+              setActiveImuVehicleId={setActiveImuVehicleId}
+              onNotifyToast={handleNotifyToast}
+              rfidGlobalState={rfidGlobalState}
             />
           )}
 
@@ -379,6 +655,10 @@ export default function App() {
               onUpdateDriver={handleUpdateDriver}
               onDeleteDriver={handleDeleteDriver}
               onAssignRfid={handleAssignRfid}
+              onUpdateVehicle={handleUpdateVehicle}
+              onTriggerAlert={handleTriggerAlert}
+              onNotifyToast={handleNotifyToast}
+              rfidGlobalState={rfidGlobalState}
             />
           )}
 
@@ -446,7 +726,44 @@ export default function App() {
             setSelectedVehicle(null);
             setActiveTab('drivers');
           }}
+          isLinkedToImu={selectedVehicle.id === activeImuVehicleId}
         />
+      )}
+
+      {/* Real-Time RFID Toast Notification per Requirement 9 */}
+      {rfidToast && (
+        <div className="fixed bottom-6 right-6 z-50 max-w-md animate-fadeIn transition-all">
+          <div
+            className={`p-4 rounded-xl shadow-2xl border flex items-start gap-3 backdrop-blur-md ${
+              rfidToast.type === 'success'
+                ? 'bg-emerald-950/95 border-emerald-500/80 text-emerald-100 shadow-[0_0_25px_rgba(16,185,129,0.3)]'
+                : rfidToast.type === 'error'
+                ? 'bg-rose-950/95 border-rose-500/80 text-rose-100 shadow-[0_0_25px_rgba(244,63,94,0.3)]'
+                : 'bg-amber-950/95 border-amber-500/80 text-amber-100 shadow-[0_0_25px_rgba(245,158,11,0.3)]'
+            }`}
+          >
+            {rfidToast.type === 'success' ? (
+              <CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0 mt-0.5" />
+            ) : (
+              <AlertTriangle className="w-5 h-5 text-rose-400 shrink-0 mt-0.5" />
+            )}
+            <div className="flex-1">
+              <div className="text-xs font-bold font-mono uppercase tracking-wider mb-1">
+                {rfidToast.title}
+              </div>
+              <div className="text-xs text-slate-200 leading-relaxed font-mono">
+                {rfidToast.message}
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setRfidToast(null)}
+              className="text-slate-400 hover:text-white p-1"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
       )}
     </div>
   );

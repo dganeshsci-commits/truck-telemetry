@@ -33,11 +33,16 @@ export interface Vehicle {
 export type DriverStatus = 'Active' | 'On Duty' | 'Resting' | 'Inactive';
 
 export interface Driver {
-  id: string;
-  name: string;
+  id: string; // driverId
+  driverId?: string; // alias
+  name: string; // driverName
+  driverName?: string; // alias
   phone: string;
   assignedVehicleId?: string;
+  assignedVehicle?: string; // vehicle plate or ID alias
   rfidId: string;
+  rfidUid?: string; // alias
+  rfidUidAliases?: string[];
   status: DriverStatus;
   licenseNumber: string;
   experienceYears: number;
@@ -45,6 +50,72 @@ export interface Driver {
   joinedDate: string;
   totalTrips: number;
   safetyScore: number; // out of 100
+  loginTime?: string;
+  lastRfidScan?: string;
+}
+
+export type RfidConnectionMode = 'LIVE_HARDWARE' | 'SIMULATION' | 'DISCONNECTED';
+export type HardwareOperationMode = 'HARDWARE' | 'DEMO';
+export type ImuConnectionStatus = 'ONLINE' | 'SIGNAL_LOST' | 'OFFLINE';
+
+export interface ImuData {
+  accel: { x: number; y: number; z: number };
+  gyro: { x: number; y: number; z: number };
+  tilt: { roll: number; pitch: number };
+  status: ImuConnectionStatus;
+  lastUpdate: string;
+  lastReceivedTimestamp: number;
+  simulatedSpeed: number;
+  speedSource: string; // "IMU Simulated Speed"
+}
+
+export interface ImuCalibrationConfig {
+  FORWARD_THRESHOLD: number;
+  BACKWARD_THRESHOLD: number;
+  SPEED_ACCELERATION_RATE: number;
+  SPEED_DECELERATION_RATE: number;
+  MAX_SPEED: number;
+  MIN_SPEED: number;
+  IMU_DEADZONE: number;
+}
+
+export interface RfidHardwareState {
+  spduinoConnected: boolean;
+  rc522Ready: boolean;
+  usbSerialConnected: boolean;
+  portName: string;
+  baudRate: number;
+  lastRfidUid: string;
+  lastScanTime: string;
+  currentMode: RfidConnectionMode;
+  error: string | null;
+  diagnostics?: {
+    imuSampleRate: number;
+    packetCount: number;
+    rfidCount: number;
+    errorCount: number;
+    lastMessage: string;
+    uptimeSeconds: number;
+  };
+}
+
+export interface RfidScanLogEntry {
+  id: string;
+  timestamp: string;
+  type: 'raw' | 'info' | 'success' | 'warning' | 'error';
+  message: string;
+}
+
+export interface LastRfidScanResult {
+  uid: string;
+  driverName: string;
+  driverId: string;
+  vehiclePlate: string;
+  vehicleId?: string;
+  authentication: 'VERIFIED' | 'DENIED' | 'ALREADY_ACTIVE' | 'PENDING';
+  timestamp: string;
+  mode: 'LIVE' | 'SIMULATION';
+  isUnknown?: boolean;
 }
 
 export interface AreaGeofence {
