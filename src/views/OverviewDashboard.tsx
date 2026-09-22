@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import { Vehicle, Driver, AlertEvent, RefuelEvent, AreaGeofence, RouteGeofence, ActiveNavTab } from '../types';
 import { LeafletMap } from '../components/LeafletMap';
+import { CompactSafetyCard } from '../components/monitoring/CompactSafetyCard';
 
 interface OverviewDashboardProps {
   vehicles: Vehicle[];
@@ -177,6 +178,13 @@ export const OverviewDashboard: React.FC<OverviewDashboardProps> = ({
 
         {/* Right Column: Fleet Health & Active Alerts */}
         <div className="lg:col-span-4 space-y-4">
+          {/* Driver Safety Snapshot (Requirement 17) */}
+          <CompactSafetyCard 
+            drivers={drivers}
+            vehicles={vehicles}
+            onNavigateToMonitoring={() => onNavigateTab('monitoring')}
+          />
+
           {/* Quick Fleet Health Cards */}
           <div className="p-4 bg-slate-900/90 rounded-2xl border border-slate-800 shadow-xl space-y-3">
             <h4 className="text-xs font-bold text-white uppercase tracking-wider flex items-center justify-between">

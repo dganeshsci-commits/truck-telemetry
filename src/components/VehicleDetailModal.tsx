@@ -14,7 +14,8 @@ import {
   Shield,
   Navigation,
   Compass,
-  ArrowUpRight
+  ArrowUpRight,
+  Eye
 } from 'lucide-react';
 import { Vehicle, Driver, AreaGeofence, RouteGeofence } from '../types';
 import { VehicleDynamicsSection } from './VehicleDynamicsSection';
@@ -281,6 +282,44 @@ export const VehicleDetailModal: React.FC<VehicleDetailModalProps> = ({
                 <span>Last updated: {vehicle.lastUpdated}</span>
               </div>
             </div>
+
+            {/* Driver Monitoring Snapshot (Requirement 18) */}
+            {assignedDriver && (
+              <div className="p-4 rounded-xl bg-slate-900/60 border border-slate-700/50 space-y-3 shadow-inner">
+                <div className="flex items-center justify-between">
+                  <span className="flex items-center gap-1.5 text-xs text-slate-400 font-bold uppercase tracking-wider">
+                    <Shield className="w-3.5 h-3.5 text-emerald-400" />
+                    AI Fatigue Monitoring
+                  </span>
+                  <div className="flex items-center gap-1.5">
+                    <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                    <span className="text-[9px] font-bold text-emerald-400 uppercase tracking-widest">Active Stream</span>
+                  </div>
+                </div>
+                
+                <div className="grid grid-cols-2 gap-4 bg-slate-950/40 p-3 rounded-lg border border-slate-800/50">
+                   <div className="space-y-0.5">
+                      <p className="text-[9px] text-slate-500 uppercase font-bold tracking-wider">Fatigue Risk</p>
+                      <p className="text-xs font-black text-emerald-400 uppercase tracking-tight">Normal / Alert</p>
+                   </div>
+                   <div className="space-y-0.5 text-right">
+                      <p className="text-[9px] text-slate-500 uppercase font-bold tracking-wider">PERCLOS</p>
+                      <p className="text-xs font-bold text-white font-mono tracking-tighter">0.05% (avg)</p>
+                   </div>
+                </div>
+
+                <div className="flex items-center justify-between text-[10px] pt-1">
+                   <div className="flex items-center gap-1 text-slate-400 font-bold uppercase tracking-widest">
+                     <Eye className="w-3 h-3 text-blue-400" />
+                     <span>Eyes: Open</span>
+                   </div>
+                   <div className="flex items-center gap-1 text-slate-400 font-bold uppercase tracking-widest">
+                     <Activity className="w-3 h-3 text-amber-400" />
+                     <span>Head: Forward</span>
+                   </div>
+                </div>
+              </div>
+            )}
 
             {/* Ignition and Power State */}
             <div className="p-4 rounded-xl bg-slate-800/60 border border-slate-700/60 flex items-center justify-between">

@@ -16,6 +16,7 @@ interface LeafletMapProps {
   isDrawingArea?: boolean;
   drawingPoints?: Array<{ lat: number; lng: number }>;
   onMapClickForDrawing?: (point: { lat: number; lng: number }) => void;
+  onDrawingPointMove?: (index: number, point: { lat: number; lng: number }) => void;
 }
 
 export const LeafletMap: React.FC<LeafletMapProps> = ({
@@ -30,7 +31,8 @@ export const LeafletMap: React.FC<LeafletMapProps> = ({
   height = '100%',
   isDrawingArea = false,
   drawingPoints = [],
-  onMapClickForDrawing
+  onMapClickForDrawing,
+  onDrawingPointMove
 }) => {
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<L.Map | null>(null);
@@ -38,8 +40,16 @@ export const LeafletMap: React.FC<LeafletMapProps> = ({
   const geofencesLayerRef = useRef<L.LayerGroup | null>(null);
   const routesLayerRef = useRef<L.LayerGroup | null>(null);
   const drawingLayerRef = useRef<L.LayerGroup | null>(null);
+  const drawingShapeLayerRef = useRef<L.LayerGroup | null>(null);
+  const drawingHandlesRef = useRef<L.Marker[]>([]);
+  const onMapClickRef = useRef(onMapClickForDrawing);
   const markersByVehicleIdRef = useRef<Map<string, { marker: L.Marker; key: string }>>(new Map());
   const prevSelectedVehIdRef = useRef<string | null>(null);
+
+  // Update ref when callback changes
+  useEffect(() => {
+    onMapClickRef.current = onMapClickForDrawing;
+  }, [onMapClickForDrawing]);
 
   // Status colors & styles
   const getStatusColor = (status: Vehicle['status']) => {
@@ -145,12 +155,13 @@ export const LeafletMap: React.FC<LeafletMapProps> = ({
     geofencesLayerRef.current = L.layerGroup().addTo(map);
     routesLayerRef.current = L.layerGroup().addTo(map);
     drawingLayerRef.current = L.layerGroup().addTo(map);
+    drawingShapeLayerRef.current = L.layerGroup().addTo(map);
     markersLayerRef.current = L.layerGroup().addTo(map);
 
     // Click handler for drawing
     map.on('click', (e: L.LeafletMouseEvent) => {
-      if (onMapClickForDrawing) {
-        onMapClickForDrawing({ lat: e.latlng.lat, lng: e.latlng.lng });
+      if (onMapClickRef.current) {
+        onMapClickRef.current({ lat: e.latlng.lat, lng: e.latlng.lng });
       }
     });
 
@@ -433,30 +444,90 @@ export const LeafletMap: React.FC<LeafletMapProps> = ({
 
   // Render temporary drawing layer
   useEffect(() => {
-    if (!mapInstanceRef.current || !drawingLayerRef.current) return;
+    if (!mapInstanceRef.current || !drawingLayerRef.current || !drawingShapeLayerRef.current) return;
 
-    drawingLayerRef.current.clearLayers();
+    const handleLayer = drawingLayerRef.current;
+    const shapeLayer = drawingShapeLayerRef.current;
+    const container = mapContainerRef.current;
+    
+    if (container) {
+      container.style.cursor = isDrawingArea ? 'crosshair' : '';
+    }
 
-    if (isDrawingArea && drawingPoints.length > 0) {
-      drawingPoints.forEach((pt, index) => {
-        const marker = L.circleMarker([pt.lat, pt.lng], {
-          radius: 5,
-          color: '#38bdf8',
-          fillColor: '#0284c7',
-          fillOpacity: 1
-        }).bindTooltip(`Point #${index + 1}`);
-        drawingLayerRef.current?.addLayer(marker);
+    if (!isDrawingArea || drawingPoints.length === 0) {
+      handleLayer.clearLayers();
+      shapeLayer.clearLayers();
+      drawingHandlesRef.current = [];
+      return;
+    }
+
+    // Update or Create Handles
+    if (drawingHandlesRef.current.length !== drawingPoints.length) {
+      handleLayer.clearLayers();
+      drawingHandlesRef.current = [];
+
+      const handleIcon = L.divIcon({
+        className: 'bg-white border-2 border-blue-600 rounded-full cursor-move shadow-md',
+        iconSize: [14, 14],
+        iconAnchor: [7, 7]
       });
 
-      if (drawingPoints.length >= 2) {
-        const line = L.polyline(
-          drawingPoints.map((p) => [p.lat, p.lng]),
-          { color: '#38bdf8', weight: 2, dashArray: '5, 5' }
-        );
-        drawingLayerRef.current?.addLayer(line);
+      drawingPoints.forEach((pt, index) => {
+        const handle = L.marker([pt.lat, pt.lng], {
+          icon: handleIcon,
+          draggable: true,
+          zIndexOffset: 1000
+        });
+
+        handle.on('drag', (e: L.LeafletEvent) => {
+          const target = e.target as L.Marker;
+          const newPos = target.getLatLng();
+          if (onDrawingPointMove) {
+            onDrawingPointMove(index, { lat: newPos.lat, lng: newPos.lng });
+          }
+        });
+
+        handle.bindTooltip(`Vertex ${index + 1}`, { direction: 'top', offset: [0, -5] });
+        handleLayer.addLayer(handle);
+        drawingHandlesRef.current.push(handle);
+      });
+    } else {
+      // Sync handle positions if they moved in state (e.g. via quick shape or undo)
+      drawingPoints.forEach((pt, index) => {
+        const handle = drawingHandlesRef.current[index];
+        const curPos = handle.getLatLng();
+        if (Math.abs(curPos.lat - pt.lat) > 0.000001 || Math.abs(curPos.lng - pt.lng) > 0.000001) {
+          handle.setLatLng([pt.lat, pt.lng]);
+        }
+      });
+    }
+
+    // Update Shape (Lines/Polygon)
+    shapeLayer.clearLayers();
+    if (drawingPoints.length >= 2) {
+      const pathPoints = drawingPoints.map((p) => [p.lat, p.lng] as [number, number]);
+      
+      if (drawingPoints.length >= 3) {
+        const polygon = L.polygon(pathPoints, {
+          color: '#38bdf8',
+          weight: 2,
+          dashArray: '5, 5',
+          fillColor: '#0284c7',
+          fillOpacity: 0.1,
+          interactive: false // Don't block handle clicks
+        });
+        shapeLayer.addLayer(polygon);
+      } else {
+        const line = L.polyline(pathPoints, {
+          color: '#38bdf8',
+          weight: 2,
+          dashArray: '5, 5',
+          interactive: false
+        });
+        shapeLayer.addLayer(line);
       }
     }
-  }, [isDrawingArea, drawingPoints]);
+  }, [isDrawingArea, drawingPoints, onDrawingPointMove]);
 
   const fitAllVehicles = () => {
     if (!mapInstanceRef.current || vehicles.length === 0) return;

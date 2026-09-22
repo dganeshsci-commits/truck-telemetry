@@ -9,8 +9,10 @@ import {
   Database,
   Radio,
   Save,
-  Globe
+  Globe,
+  Eye
 } from 'lucide-react';
+import { driverMonitoringService } from '../services/driverMonitoring';
 
 interface SettingsViewProps {
   onResetData: () => void;
@@ -25,9 +27,12 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onResetData }) => {
   const [refuelThresholdLiters, setRefuelThresholdLiters] = useState('5');
   const [notificationEmail, setNotificationEmail] = useState('fleet-ops@example.com');
   const [savedSuccess, setSavedSuccess] = useState(false);
+  
+  const [monitoringSettings, setMonitoringSettings] = useState(driverMonitoringService.getSettings());
 
   const handleSave = (e: React.FormEvent) => {
     e.preventDefault();
+    driverMonitoringService.updateSettings(monitoringSettings);
     setSavedSuccess(true);
     setTimeout(() => setSavedSuccess(false), 4000);
   };
@@ -184,6 +189,104 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onResetData }) => {
               onChange={(e) => setNotificationEmail(e.target.value)}
               className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-xs"
             />
+          </div>
+        </div>
+
+        {/* Driver Fatigue Monitoring Settings (Requirement 19) */}
+        <div className="bg-slate-900/90 rounded-2xl border border-slate-800 p-5 shadow-xl space-y-4">
+          <h3 className="text-sm font-bold text-white flex items-center gap-2 border-b border-slate-800 pb-3">
+            <Eye className="w-4 h-4 text-blue-400" />
+            <span>Driver Fatigue Monitoring Configuration</span>
+          </h3>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
+            <div>
+              <label className="block text-slate-400 mb-1.5 font-medium italic">AI Backend API Endpoint (Python Server)</label>
+              <input
+                type="text"
+                value={monitoringSettings.backendUrl}
+                onChange={(e) => setMonitoringSettings({...monitoringSettings, backendUrl: e.target.value})}
+                placeholder="http://localhost:8000"
+                className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-blue-400 font-mono"
+              />
+            </div>
+            <div>
+              <label className="block text-slate-400 mb-1.5 font-medium">Inference Frequency (FPS)</label>
+              <select 
+                value={monitoringSettings.inferenceFps}
+                onChange={(e) => setMonitoringSettings({...monitoringSettings, inferenceFps: parseInt(e.target.value)})}
+                className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white font-bold"
+              >
+                <option value={5}>5 FPS (Power Save)</option>
+                <option value={10}>10 FPS (Standard)</option>
+                <option value={15}>15 FPS (High Precision)</option>
+              </select>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-xs">
+            <div>
+              <label className="block text-slate-400 mb-1.5 font-medium">PERCLOS Window (seconds)</label>
+              <input
+                type="number"
+                value={monitoringSettings.perclosWindow}
+                onChange={(e) => setMonitoringSettings({...monitoringSettings, perclosWindow: parseInt(e.target.value)})}
+                className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white font-mono"
+              />
+            </div>
+
+            <div>
+              <label className="block text-slate-400 mb-1.5 font-medium">Long Eye Closure (ms)</label>
+              <input
+                type="number"
+                value={monitoringSettings.longEyeClosureDuration}
+                onChange={(e) => setMonitoringSettings({...monitoringSettings, longEyeClosureDuration: parseInt(e.target.value)})}
+                className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white font-mono"
+              />
+            </div>
+
+            <div>
+              <label className="block text-slate-400 mb-1.5 font-medium">Yawn Duration (ms)</label>
+              <input
+                type="number"
+                value={monitoringSettings.yawnDurationThreshold}
+                onChange={(e) => setMonitoringSettings({...monitoringSettings, yawnDurationThreshold: parseInt(e.target.value)})}
+                className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white font-mono"
+              />
+            </div>
+          </div>
+
+          <div className="pt-2">
+             <label className="block text-slate-400 mb-1.5 font-medium text-xs">Fatigue Alert Thresholds (0-100)</label>
+             <div className="grid grid-cols-3 gap-3">
+                <div className="flex items-center gap-2">
+                   <span className="text-[10px] text-amber-400 font-bold uppercase tracking-tighter">Attention:</span>
+                   <input
+                     type="number"
+                     value={monitoringSettings.fatigueScoreThresholds.attention}
+                     onChange={(e) => setMonitoringSettings({...monitoringSettings, fatigueScoreThresholds: {...monitoringSettings.fatigueScoreThresholds, attention: parseInt(e.target.value)}})}
+                     className="w-full px-2 py-1 bg-slate-800 border border-slate-700 rounded text-white text-[11px] font-mono"
+                   />
+                </div>
+                <div className="flex items-center gap-2">
+                   <span className="text-[10px] text-orange-400 font-bold uppercase tracking-tighter">Drowsy:</span>
+                   <input
+                     type="number"
+                     value={monitoringSettings.fatigueScoreThresholds.drowsy}
+                     onChange={(e) => setMonitoringSettings({...monitoringSettings, fatigueScoreThresholds: {...monitoringSettings.fatigueScoreThresholds, drowsy: parseInt(e.target.value)}})}
+                     className="w-full px-2 py-1 bg-slate-800 border border-slate-700 rounded text-white text-[11px] font-mono"
+                   />
+                </div>
+                <div className="flex items-center gap-2">
+                   <span className="text-[10px] text-rose-400 font-bold uppercase tracking-tighter">Critical:</span>
+                   <input
+                     type="number"
+                     value={monitoringSettings.fatigueScoreThresholds.critical}
+                     onChange={(e) => setMonitoringSettings({...monitoringSettings, fatigueScoreThresholds: {...monitoringSettings.fatigueScoreThresholds, critical: parseInt(e.target.value)}})}
+                     className="w-full px-2 py-1 bg-slate-800 border border-slate-700 rounded text-white text-[11px] font-mono"
+                   />
+                </div>
+             </div>
           </div>
         </div>
 

@@ -164,7 +164,12 @@ export type AlertType =
   | 'Geofence Enter'
   | 'Geofence Exit'
   | 'Route Deviation'
-  | 'Driver RFID Scan';
+  | 'Driver RFID Scan'
+  | 'Fatigue Alert'
+  | 'Drowsiness Detected'
+  | 'Long Eye Closure'
+  | 'Yawning Detected'
+  | 'Looking Away';
 
 export interface AlertRule {
   id: string;
@@ -187,6 +192,88 @@ export interface AlertEvent {
   severity: 'low' | 'medium' | 'high' | 'critical';
   status: 'New' | 'Acknowledged' | 'Resolved';
   location?: string;
+  duration?: string;
+  driverName?: string;
+}
+
+export interface DriverMonitoringData {
+  driverId: string;
+  vehicleId: string;
+  faceDetected: boolean;
+  faceBox?: [number, number, number, number]; // x, y, w, h
+  faceLandmarks?: number[];
+
+  leftEye: "open" | "closed" | "unknown";
+  rightEye: "open" | "closed" | "unknown";
+
+  perclos: number;
+  blinkRate: number;
+
+  mouthState: "normal" | "open" | "yawn";
+  yawnDetected: boolean;
+  yawnDuration: number;
+  yawnCount: number;
+
+  headPose: {
+    yaw: number;
+    pitch: number;
+    roll: number;
+  };
+
+  lookingAway: boolean;
+
+  fatigueScore: number;
+
+  fatigueState:
+    | "NORMAL"
+    | "ATTENTION"
+    | "DROWSY"
+    | "CRITICAL";
+
+  inferenceMode:
+    | "DEMO"
+    | "LAPTOP_WEBCAM"
+    | "RASPBERRY_PI_LIVE";
+
+  cameraStatus:
+    | "CONNECTED"
+    | "DISCONNECTED"
+    | "PERMISSION_DENIED"
+    | "NOT_DETECTED";
+
+  aiBackendStatus:
+    | "CONNECTED"
+    | "DISCONNECTED";
+
+  timestamp: string;
+}
+
+export interface DriverMonitoringSettings {
+  perclosWindow: number; // seconds
+  eyeClosureThreshold: number; // 0-1
+  longEyeClosureDuration: number; // ms
+  yawnDurationThreshold: number; // ms
+  lookingAwayDurationThreshold: number; // ms
+  fatigueScoreThresholds: {
+    attention: number;
+    drowsy: number;
+    critical: number;
+  };
+  cameraFps: number;
+  inferenceFps: number;
+  mode: "DEMO" | "LAPTOP_WEBCAM" | "RASPBERRY_PI_LIVE";
+  backendUrl: string;
+}
+
+export interface DriverSafetyEvent {
+  id: string;
+  timestamp: string;
+  driverName: string;
+  vehiclePlate: string;
+  eventType: string;
+  severity: "low" | "medium" | "high" | "critical";
+  duration: string;
+  status: "Active" | "Resolved";
 }
 
 export interface RefuelEvent {
@@ -230,6 +317,7 @@ export type ActiveNavTab =
   | 'fleet'
   | 'drivers'
   | 'geofencing'
+  | 'monitoring'
   | 'fuel'
   | 'notifications'
   | 'settings';

@@ -58,8 +58,6 @@ export const RfidHardwareTestSection: React.FC<RfidHardwareTestSectionProps> = (
   const isWebSerialSupported = rfidSerialManager.isSupported();
 
   // Local state for UI controls
-  const [isConnecting, setIsConnecting] = useState(false);
-  const [connectionError, setConnectionError] = useState<string | null>(null);
   const [logs, setLogs] = useState<RfidScanLogEntry[]>([
     {
       id: 'init-1',
@@ -488,19 +486,11 @@ export const RfidHardwareTestSection: React.FC<RfidHardwareTestSectionProps> = (
         </div>
       )}
 
-      {/* Error message card */}
-      {connectionError && (
-        <div className="p-3.5 rounded-xl bg-rose-950/50 border border-rose-800/80 text-rose-200 text-xs flex items-center justify-between gap-3">
-          <div className="flex items-center gap-2">
-            <XCircle className="w-4 h-4 text-rose-400 shrink-0" />
-            <span>{connectionError}</span>
-          </div>
-          <button
-            onClick={handleConnectHardware}
-            className="px-3 py-1 bg-rose-800 hover:bg-rose-700 text-white rounded text-[11px] font-semibold whitespace-nowrap transition-colors"
-          >
-            RECONNECT
-          </button>
+      {/* Error message card from global state */}
+      {rfidGlobalState.error && (
+        <div className="p-3.5 rounded-xl bg-rose-950/50 border border-rose-800/80 text-rose-200 text-xs flex items-center gap-3">
+          <XCircle className="w-4 h-4 text-rose-400 shrink-0" />
+          <span>{rfidGlobalState.error}</span>
         </div>
       )}
 

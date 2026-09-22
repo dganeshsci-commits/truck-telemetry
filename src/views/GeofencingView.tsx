@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useCallback } from 'react';
 import {
   MapPin,
   Navigation,
@@ -44,6 +44,8 @@ export const GeofencingView: React.FC<GeofencingViewProps> = ({
 }) => {
   const [activeTab, setActiveTab] = useState<'area' | 'route'>('area');
   const [isDrawing, setIsDrawing] = useState(false);
+  const [drawingMode, setDrawingMode] = useState<'manual' | 'shape'>('manual');
+  const [shapeSides, setShapeSides] = useState<number>(4);
   const [drawingPoints, setDrawingPoints] = useState<Array<{ lat: number; lng: number }>>([]);
   const [newAreaName, setNewAreaName] = useState('');
   const [selectedVehicleIds, setSelectedVehicleIds] = useState<string[]>([]);
@@ -72,9 +74,34 @@ export const GeofencingView: React.FC<GeofencingViewProps> = ({
 
   const handleMapClick = (pt: { lat: number; lng: number }) => {
     if (!isDrawing) return;
-    setDrawingPoints((prev) => [...prev, pt]);
+
+    if (drawingMode === 'manual') {
+      setDrawingPoints((prev) => [...prev, pt]);
+    } else {
+      // Generate a regular polygon centered at the click point
+      const radius = 0.005; // ~500m
+      const points = [];
+      for (let i = 0; i < shapeSides; i++) {
+        const angle = (i * 2 * Math.PI) / shapeSides;
+        points.push({
+          lat: pt.lat + radius * Math.cos(angle),
+          lng: pt.lng + radius * Math.sin(angle)
+        });
+      }
+      setDrawingPoints(points);
+      // Switch to manual mode so user can now resize/edit points individually
+      setDrawingMode('manual');
+    }
     setGeofenceError(null);
   };
+
+  const handlePointMove = useCallback((index: number, pt: { lat: number; lng: number }) => {
+    setDrawingPoints((prev) => {
+      const next = [...prev];
+      next[index] = pt;
+      return next;
+    });
+  }, []);
 
   const handleSaveAreaGeofence = () => {
     setGeofenceError(null);
@@ -275,9 +302,55 @@ export const GeofencingView: React.FC<GeofencingViewProps> = ({
 
               {isDrawing && (
                 <div className="space-y-3 pt-2 border-t border-slate-800 text-xs">
+                  <div className="flex items-center gap-2 p-1 bg-slate-800 rounded-lg border border-slate-700">
+                    <button
+                      onClick={() => {
+                        setDrawingMode('manual');
+                        setDrawingPoints([]);
+                      }}
+                      className={`flex-1 py-1 rounded text-[10px] font-bold transition-all ${
+                        drawingMode === 'manual' ? 'bg-blue-600 text-white shadow' : 'text-slate-400 hover:text-slate-200'
+                      }`}
+                    >
+                      Manual Click
+                    </button>
+                    <button
+                      onClick={() => {
+                        setDrawingMode('shape');
+                        setDrawingPoints([]);
+                      }}
+                      className={`flex-1 py-1 rounded text-[10px] font-bold transition-all ${
+                        drawingMode === 'shape' ? 'bg-blue-600 text-white shadow' : 'text-slate-400 hover:text-slate-200'
+                      }`}
+                    >
+                      Quick Shape
+                    </button>
+                  </div>
+
+                  {drawingMode === 'shape' && (
+                    <div className="p-2.5 rounded-lg bg-blue-950/30 border border-blue-900/30 space-y-2">
+                      <div className="flex justify-between text-[10px] text-blue-300 uppercase tracking-widest font-bold">
+                        <span>Sides / Points</span>
+                        <span>{shapeSides}</span>
+                      </div>
+                      <input
+                        type="range"
+                        min="3"
+                        max="12"
+                        step="1"
+                        value={shapeSides}
+                        onChange={(e) => setShapeSides(parseInt(e.target.value))}
+                        className="w-full accent-blue-500 h-1.5 bg-slate-700 rounded-lg appearance-none cursor-pointer"
+                      />
+                      <p className="text-[10px] text-slate-400 italic">
+                        Select number of vertices then click on the map to place the shape.
+                      </p>
+                    </div>
+                  )}
+
                   <div className="p-2.5 rounded-lg bg-blue-950/50 border border-blue-800/60 text-blue-200 text-[11px] leading-relaxed flex flex-col gap-1.5">
                     <div className="flex items-center justify-between">
-                      <span>💡 <strong>How to draw:</strong> Click map points for vertices.</span>
+                      <span>💡 <strong>How to draw:</strong> {drawingMode === 'manual' ? 'Click map points for vertices.' : 'Click to place center.'}</span>
                       <span className="font-mono font-bold text-blue-300 bg-blue-900/60 px-2 py-0.5 rounded text-[10px]">
                         {drawingPoints.length} points
                       </span>
@@ -623,6 +696,7 @@ export const GeofencingView: React.FC<GeofencingViewProps> = ({
               isDrawingArea={isDrawing}
               drawingPoints={drawingPoints}
               onMapClickForDrawing={handleMapClick}
+              onDrawingPointMove={handlePointMove}
             />
           </div>
         </div>

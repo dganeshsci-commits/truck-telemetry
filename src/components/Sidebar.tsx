@@ -9,7 +9,8 @@ import {
   Settings,
   Radio,
   ChevronRight,
-  ShieldCheck
+  ShieldCheck,
+  Eye
 } from 'lucide-react';
 import { ActiveNavTab, Vehicle } from '../types';
 
@@ -55,6 +56,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
       id: 'geofencing' as ActiveNavTab,
       label: 'Geofencing',
       icon: MapPin,
+      badge: null
+    },
+    {
+      id: 'monitoring' as ActiveNavTab,
+      label: 'Driver Monitoring',
+      icon: Eye,
       badge: null
     },
     {

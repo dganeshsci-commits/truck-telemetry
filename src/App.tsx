@@ -40,6 +40,8 @@ import { GeofencingView } from './views/GeofencingView';
 import { FuelView } from './views/FuelView';
 import { NotificationsView } from './views/NotificationsView';
 import { SettingsView } from './views/SettingsView';
+import { DriverMonitoringView } from './views/DriverMonitoringView';
+import { driverMonitoringService } from './services/driverMonitoring';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<ActiveNavTab>('dashboard');
@@ -222,6 +224,10 @@ export default function App() {
           if (targetVeh) {
             setActiveImuVehicleId(targetVeh.id);
             setSelectedVehicleId(targetVeh.id);
+            
+            // Link RFID scan to Driver Monitoring Service (Requirement 12)
+            driverMonitoringService.setDriverInfo(matchedDriver.id, targetVeh.id);
+            
             setVehicles((prev) =>
               prev.map((v) =>
                 v.id === targetVeh.id
@@ -699,6 +705,14 @@ export default function App() {
               onUpdateRule={handleUpdateRule}
               onDeleteRule={handleDeleteRule}
               onUpdateAlertStatus={handleUpdateAlertStatus}
+              onTriggerAlert={handleTriggerAlert}
+            />
+          )}
+
+          {activeTab === 'monitoring' && (
+            <DriverMonitoringView
+              drivers={drivers}
+              vehicles={vehicles}
               onTriggerAlert={handleTriggerAlert}
             />
           )}
