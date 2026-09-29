@@ -15,7 +15,9 @@ import {
   CreditCard,
   Video,
   ExternalLink,
-  Info
+  Info,
+  Power,
+  CheckCircle2
 } from 'lucide-react';
 import { 
   Driver, 
@@ -47,6 +49,8 @@ export const DriverMonitoringView: React.FC<DriverMonitoringViewProps> = ({
   );
   const [history, setHistory] = useState<Array<{ time: string; score: number; perclos: number }>>([]);
   const [safetyEvents, setSafetyEvents] = useState<DriverSafetyEvent[]>([]);
+  const [isTogglingModel, setIsTogglingModel] = useState(false);
+  const [modelToast, setModelToast] = useState<{ message: string; type: 'success' | 'info' } | null>(null);
 
   // Subscribe to monitoring data
   useEffect(() => {
@@ -109,8 +113,47 @@ export const DriverMonitoringView: React.FC<DriverMonitoringViewProps> = ({
     driverMonitoringService.setMode(mode);
   };
 
+  const handleToggleModel = async () => {
+    setIsTogglingModel(true);
+    const newState = await driverMonitoringService.toggleModel();
+    setIsTogglingModel(false);
+    setModelToast({
+      message: newState 
+        ? 'AI Model is now ONLINE and monitoring driver fatigue.' 
+        : 'AI Model turned OFFLINE (Standby mode).',
+      type: newState ? 'success' : 'info'
+    });
+    setTimeout(() => setModelToast(null), 4000);
+  };
+
+  const isModelOnline = monitoringData.isModelOnline && monitoringData.aiBackendStatus === 'CONNECTED';
+
   return (
     <div className="space-y-6">
+      {/* Toast Notification */}
+      {modelToast && (
+        <div className={`p-4 rounded-xl flex items-center justify-between border transition-all duration-300 shadow-xl ${
+          modelToast.type === 'success' 
+            ? 'bg-emerald-950/80 border-emerald-500/40 text-emerald-200' 
+            : 'bg-slate-900/90 border-slate-700 text-slate-200'
+        }`}>
+          <div className="flex items-center gap-3">
+            {modelToast.type === 'success' ? (
+              <CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0" />
+            ) : (
+              <Power className="w-5 h-5 text-slate-400 shrink-0" />
+            )}
+            <span className="text-sm font-semibold">{modelToast.message}</span>
+          </div>
+          <button 
+            onClick={() => setModelToast(null)}
+            className="text-xs opacity-60 hover:opacity-100 uppercase tracking-wider font-bold px-2 py-1"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
+
       {/* Page Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-slate-900/80 p-5 rounded-2xl border border-slate-800 shadow-xl">
         <div className="flex items-center gap-4">
@@ -147,7 +190,8 @@ export const DriverMonitoringView: React.FC<DriverMonitoringViewProps> = ({
           </div>
         </div>
 
-        <div className="flex items-center gap-3">
+        {/* Controls: Inference Mode & Model Power Toggle Button */}
+        <div className="flex flex-wrap items-center gap-3">
           <div className="flex flex-col items-end gap-1">
              <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Inference Mode</span>
              <select 
@@ -160,18 +204,62 @@ export const DriverMonitoringView: React.FC<DriverMonitoringViewProps> = ({
                <option value="RASPBERRY_PI_LIVE">RASPBERRY PI LIVE</option>
              </select>
           </div>
-          <div className="h-8 w-px bg-slate-800 mx-1" />
-          <div className="flex flex-col items-end">
-             <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-0.5">Model Status</span>
-             <div className="flex items-center gap-1.5">
-               <div className={`w-2 h-2 rounded-full ${monitoringData.aiBackendStatus === 'CONNECTED' ? 'bg-emerald-500 animate-pulse' : 'bg-rose-500'}`} />
-               <span className={`text-xs font-bold ${monitoringData.aiBackendStatus === 'CONNECTED' ? 'text-emerald-400' : 'text-rose-400'}`}>
-                 {monitoringData.aiBackendStatus === 'CONNECTED' ? 'MODEL LIVE' : 'MODEL OFFLINE'}
-               </span>
-             </div>
+
+          <div className="h-8 w-px bg-slate-800 mx-1 hidden sm:block" />
+
+          {/* Model Toggle Switch / Button */}
+          <div className="flex flex-col items-end gap-1">
+            <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Model Power</span>
+            <button
+              onClick={handleToggleModel}
+              disabled={isTogglingModel}
+              className={`flex items-center gap-2.5 px-3.5 py-1.5 rounded-xl border text-xs font-bold transition-all shadow-md group ${
+                isModelOnline
+                  ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-300 hover:bg-emerald-500/25 shadow-emerald-950/30'
+                  : 'bg-rose-500/15 border-rose-500/40 text-rose-300 hover:bg-rose-500/25 shadow-rose-950/30 ring-2 ring-rose-500/20'
+              }`}
+              title={isModelOnline ? 'Click to Turn Model OFF (Standby)' : 'Click to Turn Model ON'}
+            >
+              <div className="flex items-center gap-1.5">
+                <Power className={`w-3.5 h-3.5 ${isModelOnline ? 'text-emerald-400' : 'text-rose-400 animate-pulse'}`} />
+                <span>{isModelOnline ? 'MODEL ONLINE' : 'TURN ON MODEL'}</span>
+              </div>
+
+              {/* Graphical Pill Switch */}
+              <div className={`w-9 h-5 rounded-full p-0.5 transition-colors flex items-center ${
+                isModelOnline ? 'bg-emerald-500' : 'bg-slate-700'
+              }`}>
+                <div className={`w-4 h-4 rounded-full bg-white transition-transform transform shadow-sm ${
+                  isModelOnline ? 'translate-x-4' : 'translate-x-0'
+                }`} />
+              </div>
+            </button>
           </div>
         </div>
       </div>
+
+      {/* Offline Alert Banner with Turn On Button */}
+      {!isModelOnline && (
+        <div className="px-4 py-3 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-rose-500/10 border border-rose-500/30 text-rose-300">
+          <div className="flex items-center gap-2.5">
+            <div className="w-8 h-8 rounded-lg bg-rose-500/20 border border-rose-500/30 flex items-center justify-center shrink-0">
+              <Power className="w-4 h-4 text-rose-400 animate-pulse" />
+            </div>
+            <div>
+              <p className="text-xs font-bold text-white">AI Model is currently OFFLINE</p>
+              <p className="text-[11px] text-rose-300/80">Inference processing is paused. Click the toggle button to activate the neural model and resume driver safety monitoring.</p>
+            </div>
+          </div>
+          <button
+            onClick={handleToggleModel}
+            disabled={isTogglingModel}
+            className="inline-flex items-center justify-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-bold uppercase tracking-wider transition-all shadow-lg shadow-emerald-600/30 shrink-0"
+          >
+            <Power className="w-3.5 h-3.5" />
+            Turn ON Model
+          </button>
+        </div>
+      )}
 
       {/* Mode Warning Bar */}
       {monitoringData.inferenceMode !== 'RASPBERRY_PI_LIVE' && (

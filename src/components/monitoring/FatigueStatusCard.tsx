@@ -1,5 +1,5 @@
 import React from 'react';
-import { ShieldCheck, ShieldAlert, AlertTriangle, ShieldX, Activity } from 'lucide-react';
+import { ShieldCheck, ShieldAlert, AlertTriangle, ShieldX, Activity, Power } from 'lucide-react';
 import { DriverMonitoringData } from '../../types';
 
 interface FatigueStatusCardProps {
@@ -8,6 +8,17 @@ interface FatigueStatusCardProps {
 
 export const FatigueStatusCard: React.FC<FatigueStatusCardProps> = ({ data }) => {
   const getStatusConfig = () => {
+    if (!data.isModelOnline) {
+      return {
+        label: 'MODEL OFFLINE',
+        color: 'text-slate-400',
+        bg: 'bg-slate-800/40',
+        border: 'border-slate-700/60',
+        icon: Power,
+        description: 'Neural model inference is paused in standby. Click "Turn ON Model" to resume monitoring.'
+      };
+    }
+
     switch (data.fatigueState) {
       case 'NORMAL':
         return {

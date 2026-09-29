@@ -245,6 +245,9 @@ export interface DriverMonitoringData {
     | "CONNECTED"
     | "DISCONNECTED";
 
+  isModelOnline: boolean;
+  modelEngine?: string;
+
   timestamp: string;
 }
 

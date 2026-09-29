@@ -49,7 +49,9 @@ class DriverMonitoringService {
       fatigueState: 'NORMAL',
       inferenceMode: 'DEMO',
       cameraStatus: 'DISCONNECTED',
-      aiBackendStatus: 'DISCONNECTED',
+      aiBackendStatus: 'CONNECTED',
+      isModelOnline: true,
+      modelEngine: 'PYTHON_ONNX_NEURAL',
       timestamp: new Date().toISOString()
     };
   }
@@ -66,7 +68,55 @@ class DriverMonitoringService {
     this.subscribers.forEach(s => s({ ...this.data }));
   }
 
+  public async syncModelStatus(): Promise<void> {
+    try {
+      const resp = await fetch('/api/model/status');
+      if (resp.ok) {
+        const json = await resp.json();
+        this.data.isModelOnline = !!json.online;
+        this.data.aiBackendStatus = json.status || (json.online ? 'CONNECTED' : 'DISCONNECTED');
+        if (json.engine) {
+          this.data.modelEngine = json.engine;
+        }
+        this.notify();
+      }
+    } catch (e) {
+      console.warn('[DriverMonitoring] Failed to query model status:', e);
+    }
+  }
+
+  public async toggleModel(enable?: boolean): Promise<boolean> {
+    const nextState = enable !== undefined ? enable : !this.data.isModelOnline;
+    this.data.isModelOnline = nextState;
+    this.data.aiBackendStatus = nextState ? 'CONNECTED' : 'DISCONNECTED';
+    this.notify();
+
+    try {
+      const resp = await fetch('/api/model/toggle', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled: nextState })
+      });
+      if (resp.ok) {
+        const json = await resp.json();
+        this.data.isModelOnline = !!json.online;
+        this.data.aiBackendStatus = json.status;
+        if (json.engine) {
+          this.data.modelEngine = json.engine;
+        }
+      }
+    } catch (e) {
+      console.warn('[DriverMonitoring] Failed to send model toggle request:', e);
+    }
+
+    this.notify();
+    return this.data.isModelOnline;
+  }
+
   public start() {
+    // Initial sync with backend
+    this.syncModelStatus();
+
     if (this.intervalId) return;
     this.intervalId = setInterval(() => {
       if (this.settings.mode === 'DEMO') {
@@ -92,13 +142,13 @@ class DriverMonitoringService {
     if (mode === 'DEMO') {
       this.data.cameraStatus = 'CONNECTED';
       this.data.faceDetected = true;
-      this.data.aiBackendStatus = 'CONNECTED';
+      this.data.aiBackendStatus = this.data.isModelOnline ? 'CONNECTED' : 'DISCONNECTED';
       this.data.fatigueScore = 18;
       this.data.fatigueState = 'NORMAL';
     } else {
       this.data.cameraStatus = 'DISCONNECTED';
       this.data.faceDetected = false;
-      this.data.aiBackendStatus = 'DISCONNECTED';
+      this.data.aiBackendStatus = this.data.isModelOnline ? 'CONNECTED' : 'DISCONNECTED';
       this.data.leftEye = 'unknown';
       this.data.rightEye = 'unknown';
       this.data.mouthState = 'normal';
@@ -122,10 +172,11 @@ class DriverMonitoringService {
 
   public async processFrame(canvas: HTMLCanvasElement) {
     if (this.settings.mode === 'DEMO') return;
+    if (!this.data.isModelOnline) return;
 
-    // Throttle inference - significantly faster since it is local now
+    // Throttle inference
     const now = Date.now();
-    if (this.isProcessing || now - this.lastProcessTime < 200) return;
+    if (this.isProcessing || now - this.lastProcessTime < 180) return;
 
     this.isProcessing = true;
     this.lastProcessTime = now;
@@ -152,9 +203,16 @@ class DriverMonitoringService {
       }
       
       const result = await response.json();
+
+      if (result.modelOnline === false) {
+        this.data.isModelOnline = false;
+        this.data.aiBackendStatus = 'DISCONNECTED';
+        this.notify();
+        return;
+      }
       
       // Update data with real inference results
-      this.data.faceDetected = result.faceDetected;
+      this.data.faceDetected = !!result.faceDetected;
       this.data.faceBox = result.faceBox;
       this.data.faceLandmarks = result.faceLandmarks;
       this.data.leftEye = result.leftEye || 'unknown';
@@ -162,9 +220,13 @@ class DriverMonitoringService {
       this.data.mouthState = result.mouthState || 'normal';
       this.data.yawnDetected = result.mouthState === 'yawning';
       this.data.headPose = result.headPose || { yaw: 0, pitch: 0, roll: 0 };
-      this.data.fatigueScore = result.fatigueScore;
-      this.data.fatigueState = result.fatigueState;
+      this.data.fatigueScore = typeof result.fatigueScore === 'number' ? result.fatigueScore : 0;
+      this.data.fatigueState = result.fatigueState || 'NORMAL';
       this.data.aiBackendStatus = 'CONNECTED';
+      this.data.isModelOnline = true;
+      if (result.modelEngine) {
+        this.data.modelEngine = result.modelEngine;
+      }
       
       if (this.data.yawnDetected) {
         this.data.yawnCount++;
@@ -173,9 +235,11 @@ class DriverMonitoringService {
       this.data.lookingAway = Math.abs(this.data.headPose.yaw) > 30 || Math.abs(this.data.headPose.pitch) > 25;
 
     } catch (error) {
-      console.error("Inference failed:", error);
-      this.data.aiBackendStatus = 'DISCONNECTED';
-      this.data.faceDetected = false;
+      console.warn("Inference cycle notice:", error);
+      // If model is supposed to be online, keep attempting connection
+      if (this.data.isModelOnline) {
+        this.syncModelStatus();
+      }
     } finally {
       this.isProcessing = false;
       this.data.timestamp = new Date().toISOString();

@@ -1,5 +1,5 @@
 import React, { useRef, useEffect, useState, useCallback } from 'react';
-import { Camera, CameraOff, ShieldCheck, Zap, Activity, Play, Square, AlertCircle, ExternalLink, RefreshCw, Video } from 'lucide-react';
+import { Camera, CameraOff, ShieldCheck, Zap, Activity, Play, Square, AlertCircle, ExternalLink, RefreshCw, Video, Power } from 'lucide-react';
 import { DriverMonitoringData } from '../../types';
 import { driverMonitoringService } from '../../services/driverMonitoring';
 
@@ -376,11 +376,31 @@ export const LiveCameraFeed: React.FC<LiveCameraFeedProps> = ({ data }) => {
         )}
 
         {/* Non-intrusive model initializing badge */}
-        {!data.faceDetected && isLiveMode && stream && data.aiBackendStatus === 'DISCONNECTED' && (
+        {!data.faceDetected && isLiveMode && stream && data.isModelOnline && data.aiBackendStatus === 'DISCONNECTED' && (
           <div className="absolute bottom-20 left-4 pointer-events-none">
             <div className="px-3 py-1.5 bg-slate-900/80 backdrop-blur-md border border-slate-700/80 rounded-xl flex items-center gap-2">
               <AlertCircle className="w-3.5 h-3.5 text-amber-400 animate-pulse" />
               <p className="text-[10px] font-bold text-slate-300 uppercase tracking-wider">Connecting Model Pipeline...</p>
+            </div>
+          </div>
+        )}
+
+        {/* Offline notification banner if model is powered off while camera runs */}
+        {!data.isModelOnline && isLiveMode && stream && (
+          <div className="absolute top-16 left-4 right-4 z-20 pointer-events-auto flex justify-center">
+            <div className="px-4 py-2.5 bg-rose-950/90 backdrop-blur-md border border-rose-500/50 rounded-xl shadow-2xl flex items-center gap-3">
+              <Power className="w-4 h-4 text-rose-400 animate-pulse" />
+              <div className="text-left">
+                <p className="text-xs font-bold text-white">AI Fatigue Model is Offline</p>
+                <p className="text-[10px] text-rose-300/80">Camera stream is active, but neural inference is paused</p>
+              </div>
+              <button
+                onClick={() => driverMonitoringService.toggleModel(true)}
+                className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-bold uppercase tracking-wider transition-all shadow-md shadow-emerald-600/30 flex items-center gap-1.5"
+              >
+                <Power className="w-3 h-3" />
+                Turn ON
+              </button>
             </div>
           </div>
         )}
@@ -407,7 +427,7 @@ export const LiveCameraFeed: React.FC<LiveCameraFeedProps> = ({ data }) => {
       )}
 
       {/* Status Badges Overlay */}
-      <div className="absolute top-4 left-4 right-24 flex items-center gap-2 pointer-events-none">
+      <div className="absolute top-4 left-4 right-28 flex flex-wrap items-center gap-2 z-20">
         <div className="px-3 py-1.5 rounded-lg bg-slate-900/80 backdrop-blur-md border border-slate-700 flex items-center gap-2">
           <div className={`w-2 h-2 rounded-full ${data.cameraStatus === 'CONNECTED' ? 'bg-emerald-500 animate-pulse' : 'bg-rose-500'}`} />
           <span className="text-[10px] font-bold text-white uppercase tracking-wider">
@@ -420,6 +440,22 @@ export const LiveCameraFeed: React.FC<LiveCameraFeedProps> = ({ data }) => {
             {data.inferenceMode.replace(/_/g, ' ')}
           </span>
         </div>
+
+        {/* Model Power Toggle Badge */}
+        <button
+          onClick={() => driverMonitoringService.toggleModel()}
+          className={`pointer-events-auto px-3 py-1.5 rounded-lg backdrop-blur-md border flex items-center gap-2 transition-all cursor-pointer ${
+            data.isModelOnline && data.aiBackendStatus === 'CONNECTED'
+              ? 'bg-emerald-950/85 border-emerald-500/50 text-emerald-300 hover:bg-emerald-900/90 shadow-md shadow-emerald-950/50'
+              : 'bg-rose-950/85 border-rose-500/50 text-rose-300 hover:bg-rose-900/90 ring-1 ring-rose-500/40'
+          }`}
+          title={data.isModelOnline ? 'Model is ONLINE. Click to turn OFF (Standby)' : 'Model is OFFLINE. Click to turn ON'}
+        >
+          <Power className={`w-3 h-3 ${data.isModelOnline && data.aiBackendStatus === 'CONNECTED' ? 'text-emerald-400' : 'text-rose-400 animate-pulse'}`} />
+          <span className="text-[10px] font-bold uppercase tracking-wider">
+            {data.isModelOnline && data.aiBackendStatus === 'CONNECTED' ? 'MODEL: ONLINE' : 'MODEL: OFFLINE (TURN ON)'}
+          </span>
+        </button>
       </div>
 
       {/* Real-time Detections Overlay Bottom */}
