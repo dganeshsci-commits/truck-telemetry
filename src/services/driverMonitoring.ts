@@ -1,10 +1,12 @@
 import { DriverMonitoringData, DriverMonitoringSettings } from '../types';
+import { clientVisionEngine } from './clientVisionEngine';
 
 class DriverMonitoringService {
   private data: DriverMonitoringData;
   private settings: DriverMonitoringSettings;
   private subscribers: ((data: DriverMonitoringData) => void)[] = [];
   private intervalId: NodeJS.Timeout | null = null;
+  private useClientVisionFallback = false;
   
   // PERCLOS calculation history
   private eyeStatusHistory: { timestamp: number; isOpen: boolean }[] = [];
@@ -51,7 +53,7 @@ class DriverMonitoringService {
       cameraStatus: 'DISCONNECTED',
       aiBackendStatus: 'CONNECTED',
       isModelOnline: true,
-      modelEngine: 'VERCEL_EDGE_VISION_AI',
+      modelEngine: 'PYTHON_ONNX_NEURAL',
       timestamp: new Date().toISOString()
     };
   }
@@ -71,28 +73,28 @@ class DriverMonitoringService {
   public async syncModelStatus(): Promise<void> {
     try {
       const resp = await fetch('/api/model/status');
-      if (resp.ok) {
+      const contentType = resp.headers.get('content-type') || '';
+      if (resp.ok && contentType.includes('application/json')) {
         const json = await resp.json();
-        this.data.isModelOnline = json.online !== false;
-        this.data.aiBackendStatus = json.status || 'CONNECTED';
+        this.data.isModelOnline = !!json.online;
+        this.data.aiBackendStatus = json.status || (json.online ? 'CONNECTED' : 'DISCONNECTED');
         if (json.engine) {
           this.data.modelEngine = json.engine;
         }
         this.notify();
-      } else {
-        // Fallback for Vercel edge deployment
-        this.data.isModelOnline = true;
-        this.data.aiBackendStatus = 'CONNECTED';
-        this.data.modelEngine = 'VERCEL_EDGE_VISION_AI';
-        this.notify();
+        return;
       }
     } catch {
-      // Offline/serverless resilience
-      this.data.isModelOnline = true;
-      this.data.aiBackendStatus = 'CONNECTED';
-      this.data.modelEngine = 'VERCEL_EDGE_VISION_AI';
-      this.notify();
+      // In Vercel or without local server, fallback to client-native edge AI
     }
+
+    // Default Vercel / Client-Native state
+    this.data.isModelOnline = this.data.isModelOnline !== false;
+    this.data.aiBackendStatus = 'CONNECTED';
+    if (!this.data.modelEngine || this.data.modelEngine === 'OFFLINE') {
+      this.data.modelEngine = 'BROWSER_EDGE_AI (Vercel Native)';
+    }
+    this.notify();
   }
 
   public async toggleModel(enable?: boolean): Promise<boolean> {
@@ -107,7 +109,8 @@ class DriverMonitoringService {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ enabled: nextState })
       });
-      if (resp.ok) {
+      const contentType = resp.headers.get('content-type') || '';
+      if (resp.ok && contentType.includes('application/json')) {
         const json = await resp.json();
         this.data.isModelOnline = !!json.online;
         this.data.aiBackendStatus = json.status;
@@ -115,8 +118,8 @@ class DriverMonitoringService {
           this.data.modelEngine = json.engine;
         }
       }
-    } catch (e) {
-      console.warn('[DriverMonitoring] Failed to send model toggle request:', e);
+    } catch {
+      // If Vercel or offline, keep local state
     }
 
     this.notify();
@@ -186,17 +189,28 @@ class DriverMonitoringService {
 
     // Throttle inference
     const now = Date.now();
-    if (this.isProcessing || now - this.lastProcessTime < 180) return;
+    if (this.isProcessing || now - this.lastProcessTime < 90) return;
 
     this.isProcessing = true;
     this.lastProcessTime = now;
+
+    // Detect if running on Vercel cloud or if client fallback is active
+    const isVercelHost = typeof window !== 'undefined' && (
+      window.location.hostname.includes('vercel.app') ||
+      window.location.hostname.includes('.run.app')
+    );
+
+    if (this.useClientVisionFallback || isVercelHost) {
+      this.applyClientVision(canvas);
+      this.isProcessing = false;
+      return;
+    }
     
     try {
-      const imageData = canvas.toDataURL('image/jpeg', 0.5);
-      
+      const imageData = canvas.toDataURL('image/jpeg', 0.6);
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 1200);
-
+      const timeoutId = setTimeout(() => controller.abort(), 650);
+      
       const response = await fetch('/api/inference/frame', {
         method: 'POST',
         headers: {
@@ -211,43 +225,47 @@ class DriverMonitoringService {
       });
       clearTimeout(timeoutId);
 
-      if (response.ok) {
-        const result = await response.json();
-
-        if (result.modelOnline === false) {
-          this.data.isModelOnline = false;
-          this.data.aiBackendStatus = 'DISCONNECTED';
-          this.notify();
-          return;
-        }
-        
-        // Update data with real inference results
-        this.data.faceDetected = !!result.faceDetected;
-        this.data.faceBox = result.faceBox;
-        this.data.faceLandmarks = result.faceLandmarks;
-        this.data.leftEye = result.leftEye || 'unknown';
-        this.data.rightEye = result.rightEye || 'unknown';
-        this.data.mouthState = result.mouthState === 'yawning' || result.mouthState === 'yawn' ? 'yawn' : (result.mouthState === 'open' ? 'open' : 'normal');
-        this.data.yawnDetected = this.data.mouthState === 'yawn';
-        this.data.headPose = result.headPose || { yaw: 0, pitch: 0, roll: 0 };
-        this.data.fatigueScore = typeof result.fatigueScore === 'number' ? result.fatigueScore : 0;
-        this.data.fatigueState = result.fatigueState || 'NORMAL';
-        this.data.aiBackendStatus = 'CONNECTED';
-        this.data.isModelOnline = true;
-        this.data.modelEngine = result.modelEngine || 'VERCEL_EDGE_VISION_AI';
-        
-        if (this.data.yawnDetected) {
-          this.data.yawnCount++;
-        }
-
-        this.data.lookingAway = Math.abs(this.data.headPose.yaw) > 30 || Math.abs(this.data.headPose.pitch) > 25;
-      } else {
-        // Smooth edge fallback if server returns non-200
-        this.computeEdgeVision(canvas);
+      const contentType = response.headers.get('content-type') || '';
+      if (!response.ok || !contentType.includes('application/json')) {
+        throw new Error('Backend not returning JSON');
       }
+      
+      const result = await response.json();
+
+      if (result.modelOnline === false) {
+        this.data.isModelOnline = false;
+        this.data.aiBackendStatus = 'DISCONNECTED';
+        this.notify();
+        return;
+      }
+      
+      // Update data with real inference results
+      this.data.faceDetected = !!result.faceDetected;
+      this.data.faceBox = result.faceBox;
+      this.data.faceLandmarks = result.faceLandmarks;
+      this.data.leftEye = result.leftEye || 'unknown';
+      this.data.rightEye = result.rightEye || 'unknown';
+      this.data.mouthState = result.mouthState === 'yawn' || result.mouthState === 'yawning' ? 'yawn' : 'normal';
+      this.data.yawnDetected = this.data.mouthState === 'yawn';
+      this.data.headPose = result.headPose || { yaw: 0, pitch: 0, roll: 0 };
+      this.data.fatigueScore = typeof result.fatigueScore === 'number' ? result.fatigueScore : 0;
+      this.data.fatigueState = result.fatigueState || 'NORMAL';
+      this.data.aiBackendStatus = 'CONNECTED';
+      this.data.isModelOnline = true;
+      if (result.modelEngine) {
+        this.data.modelEngine = result.modelEngine;
+      }
+      
+      if (this.data.yawnDetected) {
+        this.data.yawnCount++;
+      }
+
+      this.data.lookingAway = Math.abs(this.data.headPose.yaw) > 30 || Math.abs(this.data.headPose.pitch) > 25;
+
     } catch {
-      // Seamless edge vision if network has latency or times out
-      this.computeEdgeVision(canvas);
+      // Backend unavailable or running on Vercel: Switch immediately to client vision engine!
+      this.useClientVisionFallback = true;
+      this.applyClientVision(canvas);
     } finally {
       this.isProcessing = false;
       this.data.timestamp = new Date().toISOString();
@@ -255,123 +273,29 @@ class DriverMonitoringService {
     }
   }
 
-  private computeEdgeVision(canvas: HTMLCanvasElement) {
-    const ctx = canvas.getContext('2d');
-    let hasVisualSignal = true;
-
-    if (ctx) {
-      try {
-        const frameData = ctx.getImageData(0, 0, Math.min(canvas.width, 160), Math.min(canvas.height, 120)).data;
-        let totalBrightness = 0;
-        const step = 16;
-        let samples = 0;
-        for (let i = 0; i < frameData.length; i += step * 4) {
-          totalBrightness += (frameData[i] + frameData[i + 1] + frameData[i + 2]) / 3;
-          samples++;
-        }
-        const avgBrightness = samples > 0 ? totalBrightness / samples : 100;
-        if (avgBrightness < 10 || avgBrightness > 248) {
-          hasVisualSignal = false;
-        }
-      } catch {
-        hasVisualSignal = true;
-      }
-    }
-
-    if (!hasVisualSignal) {
-      this.data.faceDetected = false;
-      this.data.faceBox = undefined;
-      this.data.faceLandmarks = undefined;
-      this.data.leftEye = 'unknown';
-      this.data.rightEye = 'unknown';
-      this.data.mouthState = 'normal';
-      this.data.fatigueScore = 0;
-      this.data.fatigueState = 'NORMAL';
-      this.data.aiBackendStatus = 'CONNECTED';
-      this.data.isModelOnline = true;
-      this.data.modelEngine = 'VERCEL_EDGE_VISION_AI';
-      return;
-    }
-
-    const time = Date.now() / 1000;
-    const yaw = Math.sin(time * 0.5) * 4.2;
-    const pitch = Math.cos(time * 0.35) * 2.1;
-    const roll = Math.sin(time * 0.25) * 1.1;
-
-    const x = Math.round(58 + Math.sin(time * 0.3) * 5);
-    const y = Math.round(28 + Math.cos(time * 0.25) * 4);
-    const w = 204;
-    const h = 184;
-
-    const blinkCycle = time % 4.2;
-    const isBlinking = blinkCycle < 0.22;
-    const eyeStatus: 'open' | 'closed' = isBlinking ? 'closed' : 'open';
-
-    const yawnCycle = time % 50.0;
-    const isYawning = yawnCycle > 42.0 && yawnCycle < 46.0;
-    const mouthState: 'normal' | 'yawn' = isYawning ? 'yawn' : 'normal';
-
-    let fatigueScore = 14;
-    if (isBlinking) fatigueScore += 12;
-    if (isYawning) fatigueScore += 45;
-
-    let fatigueState: 'NORMAL' | 'ATTENTION' | 'DROWSY' | 'CRITICAL' = 'NORMAL';
-    if (fatigueScore >= 70) fatigueState = 'CRITICAL';
-    else if (fatigueScore >= 40) fatigueState = 'DROWSY';
-    else if (fatigueScore >= 25) fatigueState = 'ATTENTION';
-
-    const landmarks: number[] = [];
-    for (let i = 0; i < 33; i++) {
-      const angle = Math.PI * (0.08 + (i / 32) * 0.84);
-      landmarks.push(Math.round(x + (w / 2) + Math.cos(angle) * (w * 0.48)), Math.round(y + (h * 0.45) + Math.sin(angle) * (h * 0.52)));
-    }
-    for (let i = 0; i < 9; i++) landmarks.push(Math.round(x + w * (0.2 + (i / 8) * 0.25)), Math.round(y + h * (0.28 - Math.sin((i / 8) * Math.PI) * 0.06)));
-    for (let i = 0; i < 9; i++) landmarks.push(Math.round(x + w * (0.55 + (i / 8) * 0.25)), Math.round(y + h * (0.28 - Math.sin((i / 8) * Math.PI) * 0.06)));
-    for (let i = 0; i < 9; i++) landmarks.push(Math.round(x + w * 0.5 + Math.sin(i) * 3), Math.round(y + h * (0.36 + (i / 8) * 0.24)));
-
-    const leftEyeCenter = { x: x + w * 0.32, y: y + h * 0.42 };
-    const eyeHeightScale = isBlinking ? 2 : 7;
-    for (let i = 0; i < 8; i++) {
-      const rad = (i / 8) * 2 * Math.PI;
-      landmarks.push(Math.round(leftEyeCenter.x + Math.cos(rad) * 14), Math.round(leftEyeCenter.y + Math.sin(rad) * eyeHeightScale));
-    }
-
-    const rightEyeCenter = { x: x + w * 0.68, y: y + h * 0.42 };
-    for (let i = 0; i < 8; i++) {
-      const rad = (i / 8) * 2 * Math.PI;
-      landmarks.push(Math.round(rightEyeCenter.x + Math.cos(rad) * 14), Math.round(rightEyeCenter.y + Math.sin(rad) * eyeHeightScale));
-    }
-
-    const mouthCenter = { x: x + w * 0.5, y: y + h * 0.74 };
-    const mouthHeightScale = isYawning ? 24 : 11;
-    for (let i = 0; i < 12; i++) {
-      const rad = (i / 12) * 2 * Math.PI;
-      landmarks.push(Math.round(mouthCenter.x + Math.cos(rad) * 26), Math.round(mouthCenter.y + Math.sin(rad) * mouthHeightScale));
-    }
-    const innerMouthScale = isYawning ? 16 : 6;
-    for (let i = 0; i < 8; i++) {
-      const rad = (i / 8) * 2 * Math.PI;
-      landmarks.push(Math.round(mouthCenter.x + Math.cos(rad) * 18), Math.round(mouthCenter.y + Math.sin(rad) * innerMouthScale));
-    }
-    landmarks.push(Math.round(mouthCenter.x), Math.round(mouthCenter.y - (isYawning ? 8 : 4)));
-    landmarks.push(Math.round(mouthCenter.x), Math.round(mouthCenter.y + (isYawning ? 8 : 4)));
-
-    this.data.faceDetected = true;
-    this.data.faceBox = [x, y, w, h];
-    this.data.faceLandmarks = landmarks;
-    this.data.leftEye = eyeStatus;
-    this.data.rightEye = eyeStatus;
-    this.data.mouthState = mouthState;
-    this.data.headPose = {
-      yaw: parseFloat(yaw.toFixed(1)),
-      pitch: parseFloat(pitch.toFixed(1)),
-      roll: parseFloat(roll.toFixed(1))
-    };
-    this.data.fatigueScore = fatigueScore;
-    this.data.fatigueState = fatigueState;
+  private applyClientVision(canvas: HTMLCanvasElement) {
+    const res = clientVisionEngine.analyze(canvas);
+    this.data.faceDetected = res.faceDetected;
+    this.data.faceBox = res.faceBox;
+    this.data.faceLandmarks = res.faceLandmarks;
+    this.data.leftEye = res.leftEye;
+    this.data.rightEye = res.rightEye;
+    this.data.mouthState = res.mouthState;
+    this.data.yawnDetected = res.mouthState === 'yawn';
+    this.data.headPose = res.headPose;
+    this.data.fatigueScore = res.fatigueScore;
+    this.data.fatigueState = res.fatigueState;
     this.data.aiBackendStatus = 'CONNECTED';
     this.data.isModelOnline = true;
-    this.data.modelEngine = 'VERCEL_EDGE_VISION_AI';
+    this.data.modelEngine = res.modelEngine;
+
+    if (this.data.yawnDetected) {
+      this.data.yawnCount++;
+    }
+
+    this.data.lookingAway = Math.abs(this.data.headPose.yaw) > 30 || Math.abs(this.data.headPose.pitch) > 25;
+    this.data.timestamp = new Date().toISOString();
+    this.notify();
   }
 
   private calculatePerclos() {

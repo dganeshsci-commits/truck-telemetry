@@ -375,12 +375,15 @@ export const LiveCameraFeed: React.FC<LiveCameraFeedProps> = ({ data }) => {
           </>
         )}
 
-        {/* Non-intrusive model initializing badge */}
-        {!data.faceDetected && isLiveMode && stream && data.isModelOnline && data.aiBackendStatus === 'DISCONNECTED' && (
-          <div className="absolute bottom-20 left-4 pointer-events-none">
-            <div className="px-3 py-1.5 bg-slate-900/80 backdrop-blur-md border border-slate-700/80 rounded-xl flex items-center gap-2">
-              <AlertCircle className="w-3.5 h-3.5 text-amber-400 animate-pulse" />
-              <p className="text-[10px] font-bold text-slate-300 uppercase tracking-wider">Connecting Model Pipeline...</p>
+        {/* Face Scanning & Targeting Guide */}
+        {!data.faceDetected && isLiveMode && stream && data.isModelOnline && (
+          <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
+            <div className="w-44 h-52 rounded-3xl border-2 border-dashed border-blue-400/40 flex items-center justify-center animate-pulse">
+              <div className="text-center px-3.5 py-2 bg-slate-900/85 backdrop-blur-md rounded-xl border border-slate-700/80 shadow-xl">
+                <Activity className="w-4 h-4 text-blue-400 mx-auto animate-spin [animation-duration:4s]" />
+                <p className="text-[11px] font-bold text-white mt-1 tracking-wide">Scanning for Driver Face</p>
+                <p className="text-[9px] text-slate-400 mt-0.5">Position face inside camera frame</p>
+              </div>
             </div>
           </div>
         )}

@@ -323,9 +323,19 @@ async function startServer() {
         isPythonBackendRunning = false;
       }
 
-      // Seamless fallback if Python is initializing or unavailable
+      // When Python is unavailable, return empty state and delegate to client browser vision
       if (!result) {
-        result = computeEmbeddedVisionFallback(image);
+        result = {
+          faceDetected: false,
+          modelOnline: true,
+          modelEngine: 'CLIENT_BROWSER_VISION',
+          fatigueScore: 0,
+          fatigueState: 'NORMAL',
+          leftEye: 'unknown',
+          rightEye: 'unknown',
+          mouthState: 'normal',
+          headPose: { yaw: 0, pitch: 0, roll: 0 }
+        };
       }
 
       res.json(result);
