@@ -1,6 +1,11 @@
+import sys
+import os
+_BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+if _BASE_DIR not in sys.path:
+    sys.path.insert(0, _BASE_DIR)
+
 import _thread
 import cv2
-import os
 import time
 import json
 import psutil
@@ -431,31 +436,50 @@ def api_predict():
                 "fatigueState": "NORMAL"
             }
 
-        # Calculate fatigue score (simulated based on eye/mouth state as per repo logic)
-        # The repo uses a simple state list logic. We'll simplify for the API.
-        eye_closed = refer_ret["eye_left_status"] == "C" or refer_ret["eye_right_status"] == "C"
-        yawn = refer_ret["mouth_status"] == "O"
+        # Calculate fatigue score based on eye, mouth, and head pose states
+        eye_left_closed = (refer_ret["eye_left_status"] == "C")
+        eye_right_closed = (refer_ret["eye_right_status"] == "C")
+        mar_val = float(refer_ret.get("mar", 0.0))
+        mouth_raw = refer_ret.get("mouth_status", "C")
+
+        if mouth_raw == "O" or mar_val > 0.42:
+            mouth_state = "yawn"
+        elif mar_val > 0.28:
+            mouth_state = "open"
+        else:
+            mouth_state = "normal"
         
-        score = 0
-        if eye_closed: score += 40
-        if yawn: score += 30
+        score = 12
+        if eye_left_closed and eye_right_closed:
+            score += 55
+        elif eye_left_closed or eye_right_closed:
+            score += 35
+
+        if mouth_state == "yawn":
+            score += 30
+        elif mouth_state == "open":
+            score += 10
         
+        score = min(99, max(0, score))
         state = "NORMAL"
-        if score >= 70: state = "CRITICAL"
-        elif score >= 40: state = "DROWSY"
-        elif score >= 30: state = "ATTENTION"
+        if score >= 70:
+            state = "CRITICAL"
+        elif score >= 50:
+            state = "DROWSY"
+        elif score >= 30:
+            state = "ATTENTION"
 
         return {
             "faceDetected": True,
             "faceBox": [float(x) for x in refer_ret.get("face_box", [0, 0, 0, 0])],
             "faceLandmarks": [float(x) for x in refer_ret.get("face_landmarks", [])],
-            "leftEye": "closed" if refer_ret["eye_left_status"] == "C" else "open",
-            "rightEye": "closed" if refer_ret["eye_right_status"] == "C" else "open",
-            "mouthState": "yawning" if refer_ret["mouth_status"] == "O" else "normal",
+            "leftEye": "closed" if eye_left_closed else "open",
+            "rightEye": "closed" if eye_right_closed else "open",
+            "mouthState": mouth_state,
             "headPose": refer_ret.get("head_pose", { "yaw": 0.0, "pitch": 0.0, "roll": 0.0 }),
             "earLeft": float(refer_ret.get("ear_left", 0.0)),
             "earRight": float(refer_ret.get("ear_right", 0.0)),
-            "mar": float(refer_ret.get("mar", 0.0)),
+            "mar": mar_val,
             "fatigueScore": score,
             "fatigueState": state
         }

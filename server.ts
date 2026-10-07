@@ -3,6 +3,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { createServer as createViteServer } from 'vite';
 import dotenv from 'dotenv';
+import fs from 'fs';
 import { spawn, ChildProcess } from 'child_process';
 
 dotenv.config();
@@ -50,10 +51,16 @@ async function ensurePythonProcess() {
 
   isSpawningPython = true;
   try {
-    console.log('[Model Supervisor] Launching Python AI service (ai_model/app.py)...');
-    pythonProcess = spawn('python3', ['ai_model/app.py'], {
+    const venvPythonWin = path.join(process.cwd(), '.venv', 'Scripts', 'python.exe');
+    const venvPythonNix = path.join(process.cwd(), '.venv', 'bin', 'python');
+    const pythonCmd = fs.existsSync(venvPythonWin)
+      ? venvPythonWin
+      : (fs.existsSync(venvPythonNix) ? venvPythonNix : (process.platform === 'win32' ? 'py' : 'python3'));
+
+    console.log(`[Model Supervisor] Launching Python AI service with: ${pythonCmd}`);
+    pythonProcess = spawn(pythonCmd, ['ai_model/app.py'], {
       cwd: process.cwd(),
-      env: { ...process.env, PYTHONUNBUFFERED: '1' },
+      env: { ...process.env, PYTHONPATH: path.join(process.cwd(), 'ai_model'), PYTHONUNBUFFERED: '1' },
       stdio: ['ignore', 'pipe', 'pipe']
     });
 
@@ -300,7 +307,7 @@ async function startServer() {
       let result = null;
       try {
         const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 900);
+        const timeout = setTimeout(() => controller.abort(), 2500);
         
         const response = await fetch('http://localhost:5000/api/predict', {
           method: 'POST',

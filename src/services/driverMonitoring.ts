@@ -201,7 +201,7 @@ class DriverMonitoringService {
     );
 
     if (this.useClientVisionFallback || isVercelHost) {
-      this.applyClientVision(canvas);
+      await this.applyClientVision(canvas);
       this.isProcessing = false;
       return;
     }
@@ -209,7 +209,7 @@ class DriverMonitoringService {
     try {
       const imageData = canvas.toDataURL('image/jpeg', 0.6);
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 650);
+      const timeoutId = setTimeout(() => controller.abort(), 2000);
       
       const response = await fetch('/api/inference/frame', {
         method: 'POST',
@@ -238,15 +238,28 @@ class DriverMonitoringService {
         this.notify();
         return;
       }
+
+      // If backend did not detect face or eyes are unknown, fall back to high-speed client vision engine
+      if (!result.faceDetected || result.leftEye === 'unknown' || result.rightEye === 'unknown') {
+        await this.applyClientVision(canvas);
+        return;
+      }
       
       // Update data with real inference results
-      this.data.faceDetected = !!result.faceDetected;
+      this.data.faceDetected = true;
       this.data.faceBox = result.faceBox;
       this.data.faceLandmarks = result.faceLandmarks;
-      this.data.leftEye = result.leftEye || 'unknown';
-      this.data.rightEye = result.rightEye || 'unknown';
-      this.data.mouthState = result.mouthState === 'yawn' || result.mouthState === 'yawning' ? 'yawn' : 'normal';
-      this.data.yawnDetected = this.data.mouthState === 'yawn';
+      this.data.leftEye = result.leftEye === 'closed' ? 'closed' : 'open';
+      this.data.rightEye = result.rightEye === 'closed' ? 'closed' : 'open';
+      
+      let mouthState: 'normal' | 'open' | 'yawn' = 'normal';
+      if (result.mouthState === 'yawn' || result.mouthState === 'yawning') {
+        mouthState = 'yawn';
+      } else if (result.mouthState === 'open') {
+        mouthState = 'open';
+      }
+      this.data.mouthState = mouthState;
+      this.data.yawnDetected = mouthState === 'yawn';
       this.data.headPose = result.headPose || { yaw: 0, pitch: 0, roll: 0 };
       this.data.fatigueScore = typeof result.fatigueScore === 'number' ? result.fatigueScore : 0;
       this.data.fatigueState = result.fatigueState || 'NORMAL';
@@ -265,7 +278,7 @@ class DriverMonitoringService {
     } catch {
       // Backend unavailable or running on Vercel: Switch immediately to client vision engine!
       this.useClientVisionFallback = true;
-      this.applyClientVision(canvas);
+      await this.applyClientVision(canvas);
     } finally {
       this.isProcessing = false;
       this.data.timestamp = new Date().toISOString();
@@ -273,8 +286,8 @@ class DriverMonitoringService {
     }
   }
 
-  private applyClientVision(canvas: HTMLCanvasElement) {
-    const res = clientVisionEngine.analyze(canvas);
+  private async applyClientVision(canvas: HTMLCanvasElement) {
+    const res = await clientVisionEngine.analyze(canvas);
     this.data.faceDetected = res.faceDetected;
     this.data.faceBox = res.faceBox;
     this.data.faceLandmarks = res.faceLandmarks;
@@ -293,7 +306,9 @@ class DriverMonitoringService {
       this.data.yawnCount++;
     }
 
-    this.data.lookingAway = Math.abs(this.data.headPose.yaw) > 30 || Math.abs(this.data.headPose.pitch) > 25;
+    if (res.headPose) {
+      this.data.lookingAway = Math.abs(res.headPose.yaw) > 30 || Math.abs(res.headPose.pitch) > 25;
+    }
     this.data.timestamp = new Date().toISOString();
     this.notify();
   }

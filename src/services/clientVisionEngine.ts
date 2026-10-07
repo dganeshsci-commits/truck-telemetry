@@ -154,9 +154,9 @@ class ClientVisionEngine {
     const earRight = rightEyeMetrics.ear;
     const avgEar = (earLeft + earRight) / 2;
 
-    const isEyesClosed = leftEyeMetrics.isClosed || rightEyeMetrics.isClosed || avgEar < 0.21;
+    const isEyesClosed = leftEyeMetrics.isClosed && rightEyeMetrics.isClosed;
 
-    if (isEyesClosed) {
+    if (isEyesClosed || leftEyeMetrics.isClosed || rightEyeMetrics.isClosed) {
       this.consecutiveClosedFrames++;
     } else {
       this.consecutiveClosedFrames = 0;
@@ -179,12 +179,12 @@ class ClientVisionEngine {
     let mouthState: 'normal' | 'open' | 'yawn' = 'normal';
     if (mouthMetrics.isYawn) {
       this.consecutiveYawnFrames++;
-      if (this.consecutiveYawnFrames >= 3) {
+      if (this.consecutiveYawnFrames >= 2) {
         mouthState = 'yawn';
       } else {
         mouthState = 'open';
       }
-    } else if (mar > 0.28) {
+    } else if (mar > 0.26) {
       mouthState = 'open';
       this.consecutiveYawnFrames = 0;
     } else {
@@ -243,8 +243,8 @@ class ClientVisionEngine {
       faceDetected: true,
       faceBox: this.smoothedFaceBox,
       faceLandmarks: landmarks,
-      leftEye: isEyesClosed ? 'closed' : 'open',
-      rightEye: isEyesClosed ? 'closed' : 'open',
+      leftEye: leftEyeMetrics.isClosed ? 'closed' : 'open',
+      rightEye: rightEyeMetrics.isClosed ? 'closed' : 'open',
       mouthState,
       headPose: { yaw, pitch, roll },
       earLeft,
@@ -302,8 +302,24 @@ class ClientVisionEngine {
     const totalSamples = ((w - 16) / step) * ((h - 16) / step);
     const skinRatio = skinCount / Math.max(1, totalSamples);
 
-    // Minimum face presence threshold (at least 2.5% of pixels)
-    if (skinCount < 120 || skinRatio < 0.025) {
+    // Minimum face presence threshold (at least 1.5% of pixels)
+    if (skinCount < 60 || skinRatio < 0.015) {
+      let totalLuma = 0;
+      let samples = 0;
+      for (let i = 0; i < data.length; i += 32 * 4) {
+        totalLuma += (data[i] + data[i + 1] + data[i + 2]) / 3;
+        samples++;
+      }
+      const avg = samples > 0 ? totalLuma / samples : 0;
+      if (avg >= 15 && avg <= 248) {
+        // Return centered driver seat face anchor
+        return [
+          Math.round(w * 0.28),
+          Math.round(h * 0.18),
+          Math.round(w * 0.44),
+          Math.round(h * 0.62)
+        ];
+      }
       return null;
     }
 
@@ -334,7 +350,7 @@ class ClientVisionEngine {
   }
 
   /**
-   * Measures eye pupil vs eyelid luminance contrast
+   * Measures eye pupil vs eyelid luminance contrast (relative to ambient illumination)
    */
   private measureEyeOpenness(
     data: Uint8ClampedArray,
@@ -369,7 +385,7 @@ class ClientVisionEngine {
     }
 
     if (sampleCount === 0) {
-      return { ear: 0.30, isClosed: false };
+      return { ear: 0.32, isClosed: false };
     }
 
     const avgLuma = sumLuma / sampleCount;
@@ -380,12 +396,16 @@ class ClientVisionEngine {
     }
     const stdDev = Math.sqrt(varianceSum / sampleCount);
 
-    const contrastRange = maxLuma - minLuma;
-    const isClosed = stdDev < 12.0 || contrastRange < 42 || minLuma > 98;
+    // Relative contrast: dark iris/pupil vs eye sclera & skin
+    const relContrast = (maxLuma - minLuma) / Math.max(25, avgLuma);
+    const darkDip = (avgLuma - minLuma) / Math.max(25, avgLuma);
+
+    // Eye is closed if eyelid skin covers the pupil (low dark dip & uniform luminance)
+    const isClosed = (relContrast < 0.22 && darkDip < 0.14) || (darkDip < 0.10 && stdDev < 6.5);
 
     const rawEar = isClosed
-      ? Math.max(0.08, 0.14 - (stdDev / 100))
-      : Math.min(0.38, 0.26 + (stdDev / 120));
+      ? Math.max(0.08, 0.14 - (stdDev / 120))
+      : Math.min(0.38, 0.25 + (darkDip * 0.22));
 
     return {
       ear: parseFloat(rawEar.toFixed(2)),
@@ -394,7 +414,7 @@ class ClientVisionEngine {
   }
 
   /**
-   * Measures dark oral cavity aperture for yawning
+   * Measures dark oral cavity aperture for yawning (relative to mouth skin luminance)
    */
   private measureMouthOpening(
     data: Uint8ClampedArray,
@@ -405,15 +425,30 @@ class ClientVisionEngine {
     mw: number,
     mh: number
   ): { mar: number; isYawn: boolean } {
-    let darkPixelCount = 0;
-    let minDarkY = mh;
-    let maxDarkY = 0;
-    let totalSamples = 0;
+    let sumLuma = 0;
+    let sampleCount = 0;
 
     const startX = Math.max(0, mx);
     const endX = Math.min(w - 1, mx + mw);
     const startY = Math.max(0, my);
     const endY = Math.min(h - 1, my + mh);
+
+    // First pass: compute average mouth region luminance
+    for (let y = startY; y < endY; y += 2) {
+      for (let x = startX; x < endX; x += 2) {
+        const idx = (y * w + x) * 4;
+        sumLuma += 0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2];
+        sampleCount++;
+      }
+    }
+
+    const avgMouthLuma = sampleCount > 0 ? sumLuma / sampleCount : 120;
+    const oralCavityThreshold = Math.max(30, avgMouthLuma * 0.62);
+
+    let darkPixelCount = 0;
+    let minDarkY = mh;
+    let maxDarkY = 0;
+    let totalSamples = 0;
 
     for (let y = startY; y < endY; y += 2) {
       for (let x = startX; x < endX; x += 2) {
@@ -421,8 +456,8 @@ class ClientVisionEngine {
         const luma = 0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2];
         totalSamples++;
 
-        // Oral cavity shadow threshold
-        if (luma < 52) {
+        // Oral cavity depth shadow
+        if (luma < oralCavityThreshold) {
           darkPixelCount++;
           const relY = y - my;
           if (relY < minDarkY) minDarkY = relY;
@@ -439,10 +474,10 @@ class ClientVisionEngine {
     const darkHeight = Math.max(0, maxDarkY - minDarkY);
     const apertureRatio = darkHeight / Math.max(1, mh);
 
-    let mar = 0.16 + (apertureRatio * 0.46) + (darkRatio * 0.36);
+    let mar = 0.16 + (apertureRatio * 0.48) + (darkRatio * 0.40);
     mar = parseFloat(Math.min(0.85, Math.max(0.12, mar)).toFixed(2));
 
-    const isYawn = mar > 0.40 && darkRatio > 0.12;
+    const isYawn = mar > 0.40 && (darkRatio > 0.08 || apertureRatio > 0.32);
 
     return {
       mar,

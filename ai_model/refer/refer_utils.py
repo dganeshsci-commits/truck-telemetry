@@ -142,7 +142,7 @@ def hard_nms(box_scores, iou_threshold, top_k=-1, candidate_size=200):
     return box_scores[picked, :]
 
 
-def predict(confidences, boxes, prob_threshold=0.7, image_size=(320, 240), iou_threshold=0.3, top_k=1):
+def predict(confidences, boxes, prob_threshold=0.45, image_size=(320, 240), iou_threshold=0.3, top_k=1):
     boxes = np.squeeze(boxes)
     confidences = np.squeeze(confidences)
     picked_box_probs = []
@@ -172,7 +172,7 @@ def predict(confidences, boxes, prob_threshold=0.7, image_size=(320, 240), iou_t
 
 
 # 获取大于 prob_threshold 的最优的结果
-def get_predict_box(confidences, boxes, image_size=(320, 240), prob_threshold=0.7):
+def get_predict_box(confidences, boxes, image_size=(320, 240), prob_threshold=0.45):
     boxes = np.squeeze(boxes)
     confidences = np.squeeze(confidences)
     # 过滤结果
