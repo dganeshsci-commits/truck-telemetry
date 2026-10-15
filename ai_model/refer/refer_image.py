@@ -43,17 +43,32 @@ def compute_ear_from_landmarks(pts, eye_indices):
 
 
 def compute_mar_from_landmarks(pts):
-    """Calculate Mouth Aspect Ratio (MAR) from WFLW 98 facial landmark points."""
+    """Calculate Mouth Aspect Ratio (MAR) using WFLW 98 inner-lip (88-95) and outer-lip (76-87) landmarks."""
     try:
         p_left = np.array([pts[76 * 2], pts[76 * 2 + 1]], dtype=np.float32)
         p_right = np.array([pts[82 * 2], pts[82 * 2 + 1]], dtype=np.float32)
-        p_top = np.array([pts[79 * 2], pts[79 * 2 + 1]], dtype=np.float32)
-        p_bot = np.array([pts[85 * 2], pts[85 * 2 + 1]], dtype=np.float32)
         h = np.linalg.norm(p_left - p_right)
-        v = np.linalg.norm(p_top - p_bot)
         if h < 1e-4:
             return 0.0
-        return float(v / h)
+
+        # Inner lip vertical distances: (89,95), (90,94), (91,93)
+        p89 = np.array([pts[89 * 2], pts[89 * 2 + 1]], dtype=np.float32)
+        p95 = np.array([pts[95 * 2], pts[95 * 2 + 1]], dtype=np.float32)
+        p90 = np.array([pts[90 * 2], pts[90 * 2 + 1]], dtype=np.float32)
+        p94 = np.array([pts[94 * 2], pts[94 * 2 + 1]], dtype=np.float32)
+        p91 = np.array([pts[91 * 2], pts[91 * 2 + 1]], dtype=np.float32)
+        p93 = np.array([pts[93 * 2], pts[93 * 2 + 1]], dtype=np.float32)
+        inner_v = (np.linalg.norm(p89 - p95) + np.linalg.norm(p90 - p94) + np.linalg.norm(p91 - p93)) / 3.0
+        inner_mar = float(inner_v / h)
+
+        # Outer lip vertical distance: (79, 85) minus natural lip thickness baseline (~0.24)
+        p_top = np.array([pts[79 * 2], pts[79 * 2 + 1]], dtype=np.float32)
+        p_bot = np.array([pts[85 * 2], pts[85 * 2 + 1]], dtype=np.float32)
+        outer_mar = float(np.linalg.norm(p_top - p_bot) / h)
+
+        # Combine inner lip opening with lip-thickness-compensated outer ratio
+        effective_mar = max(inner_mar * 1.45, max(0.0, outer_mar - 0.24) * 1.15)
+        return float(effective_mar)
     except Exception:
         return 0.0
 
@@ -74,12 +89,12 @@ def compute_head_pose_from_landmarks(pts):
 
         span_x = max(abs(x_cheek_l - x_cheek_r), 1.0)
         nose_ratio = (x_nose - x_cheek_r) / span_x
-        yaw = (nose_ratio - 0.5) * 80.0
+        yaw = (nose_ratio - 0.5) * 90.0
 
         eye_y_mid = (y_eye_r + y_eye_l) / 2.0
         face_h = max(abs(y_chin - eye_y_mid), 1.0)
         nose_v = (y_nose - eye_y_mid) / face_h
-        pitch = (nose_v - 0.45) * 75.0
+        pitch = (nose_v - 0.38) * 90.0
 
         return {
             "yaw": round(float(yaw), 1),
@@ -246,9 +261,9 @@ class ReferImage:
         # 如果不sleepCPU占用会比较高，RKNN时CPU会到20%；ONNX时CPU会到100%
         # time.sleep(0.1)
 
-        # 未检测到人脸就显示原视频
-        # 未检测到人脸，返回
+        # 未检测到人脸，重置关键点平滑缓存并返回
         if len(probs) == 0:
+            self.prev_pts = []
             return ret
         ret["face_detect"] = True
 
@@ -275,9 +290,8 @@ class ReferImage:
             image = np.expand_dims(image, axis=0)
             inputs = {self.pfld_session.get_inputs()[0].name: image}
         else:
-            # Manual normalization for PFLD: (x - 0.5) / 0.5
-            img_data = np.array(ret["face_image"]).astype(np.float32)
-            img_data = (img_data / 255.0 - 0.5) / 0.5
+            # Normalize to [0.0, 1.0] matching ToTensor() and model_trans.py
+            img_data = np.array(ret["face_image"]).astype(np.float32) / 255.0
             img_data = np.transpose(img_data, (2, 0, 1))
             img_data = np.expand_dims(img_data, axis=0)
             inputs = {self.pfld_session.get_inputs()[0].name: img_data}
@@ -289,6 +303,14 @@ class ReferImage:
         t_6 = time.time()
         # 人脸关键点 后处理
         preds = np.squeeze(outputs)
+        if len(self.prev_pts) == 196:
+            # If face jumped significantly across frame, reset smoothing buffer
+            old_nose_x, old_nose_y = self.prev_pts[54 * 2], self.prev_pts[54 * 2 + 1]
+            new_nose_x = preds[54 * 2] * 112 * scale_l + x_offset
+            new_nose_y = preds[54 * 2 + 1] * 112 * scale_l + y_offset
+            if abs(new_nose_x - old_nose_x) > 45 or abs(new_nose_y - old_nose_y) > 45:
+                self.prev_pts = []
+
         if len(self.prev_pts) == 0:
             # 添加上一帧的结果，增加平滑度
             for i in range(98):
@@ -300,8 +322,8 @@ class ReferImage:
             center_x = preds[i * 2] * 112 * scale_l + x_offset
             center_y = preds[i * 2 + 1] * 112 * scale_l + y_offset
 
-            # 平滑系数
-            beta = 0.7
+            # 平滑系数 (0.78 keeps eye/mouth landmarks responsive to fast blinks)
+            beta = 0.78
             smooth_center_x = center_x * beta + self.prev_pts[i * 2] * (1 - beta)
             smooth_center_y = center_y * beta + self.prev_pts[i * 2 + 1] * (1 - beta)
 
@@ -309,10 +331,7 @@ class ReferImage:
             self.prev_pts[i * 2] = smooth_center_x
             self.prev_pts[i * 2 + 1] = smooth_center_y
 
-            # radius = 1
-            # draw.ellipse((smooth_center_x - radius, smooth_center_y - radius, smooth_center_x + radius,
-            #               smooth_center_y + radius), (0, 255, 127))
-        ret["face_landmarks"] = self.prev_pts
+        ret["face_landmarks"] = list(self.prev_pts)
         t_7 = time.time()
 
         # 人脸关键点 耗时
@@ -321,7 +340,6 @@ class ReferImage:
         ret["stat_pfld_suffix"] = t_7 - t_6
 
         # 继续截取眼部和嘴巴的图片进行眼睛睁开和闭合的判别（图片大小均为64 x 64）
-        # # 参考 https://wywu.github.io/projects/LAB/WFLW.html
         t_8 = time.time()
         cut_bias = 15
         ret["eye_left_box"] = [
@@ -353,38 +371,23 @@ class ReferImage:
             cut_eye_right = get_img_tensor(ret["eye_right_image"], False, (64, 64), self.image_transform)
             cut_eye_right_inputs = {self.mouth_session.get_inputs()[0].name: to_numpy(cut_eye_right).transpose(0, 2, 3, 1)}
 
-            # api trans
             cut_mouth = get_img_tensor(ret["mouth_image"], False, (64, 64), self.image_transform)
             cut_mouth_inputs = {self.mouth_session.get_inputs()[0].name: to_numpy(cut_mouth).transpose(0, 2, 3, 1)}
-
-            # torch model test
-            # image_transform = transforms.Compose([transforms.ToTensor()])
-            # cut_mouth = np.squeeze(np.array(cut_mouth_img))
-            # # # cut_mouth = Image.open(sample_mouth_data_dir + "/mouth_" + str(frame_count) + ".png").resize((64, 64))
-            # # # cut_mouth = Image.open("/root/projects/blockchain_fatigue_detect/train_classify_model/test_data/mouth/open/mouth_36.png").resize((64, 64))
-            # cut_mouth = image_transform(cut_mouth)
-            # cut_mouth = torch.unsqueeze(cut_mouth, 0)
-            # cut_mouth = to_numpy(cut_mouth)
-            # print(cut_mouth.shape)
-            # cut_mouth_inputs = {mouth_session.get_inputs()[0].name: cut_mouth}
         else:
             # Eye left - normalize to [0.0, 1.0] matching ToTensor() training
-            img_data = np.array(ret["eye_left_image"]).astype(np.float32)
-            img_data = img_data / 255.0
+            img_data = np.array(ret["eye_left_image"]).astype(np.float32) / 255.0
             img_data = np.transpose(img_data, (2, 0, 1))
             img_data = np.expand_dims(img_data, axis=0)
             cut_eye_left_inputs = {self.eye_session.get_inputs()[0].name: img_data}
 
             # Eye right - normalize to [0.0, 1.0] matching ToTensor() training
-            img_data = np.array(ret["eye_right_image"]).astype(np.float32)
-            img_data = img_data / 255.0
+            img_data = np.array(ret["eye_right_image"]).astype(np.float32) / 255.0
             img_data = np.transpose(img_data, (2, 0, 1))
             img_data = np.expand_dims(img_data, axis=0)
             cut_eye_right_inputs = {self.eye_session.get_inputs()[0].name: img_data}
 
             # Mouth
-            img_data = np.array(ret["mouth_image"]).astype(np.float32)
-            img_data = img_data / 255.0
+            img_data = np.array(ret["mouth_image"]).astype(np.float32) / 255.0
             img_data = np.transpose(img_data, (2, 0, 1))
             img_data = np.expand_dims(img_data, axis=0)
             cut_mouth_inputs = {self.mouth_session.get_inputs()[0].name: img_data}
@@ -394,9 +397,6 @@ class ReferImage:
         left_eye_output = self.eye_session.run(None, cut_eye_left_inputs)
         right_eye_output = self.eye_session.run(None, cut_eye_right_inputs)
         mouth_output = self.mouth_session.run(None, cut_mouth_inputs)
-        log_debug(f"right_eye : {str(right_eye_output)}")
-        log_debug(f"left_eye : {str(left_eye_output)}")
-        log_debug(f"mouth : {str(mouth_output)}")
 
         # 后处理
         t_10 = time.time()
@@ -405,11 +405,26 @@ class ReferImage:
         mouth_output = np.squeeze(mouth_output)
 
         # Calculate geometric Eye Aspect Ratio (EAR), Mouth Aspect Ratio (MAR), and Head Pose
+        # Note: Use raw unsmoothed points for instantaneous blink sensitivity alongside smoothed points
+        raw_pts = []
+        for i in range(98):
+            raw_pts.append(preds[i * 2] * 112 * scale_l + x_offset)
+            raw_pts.append(preds[i * 2 + 1] * 112 * scale_l + y_offset)
+
         r_eye_indices = [60, 61, 62, 63, 64, 65, 66, 67]
         l_eye_indices = [68, 69, 70, 71, 72, 73, 74, 75]
-        ear_right = compute_ear_from_landmarks(self.prev_pts, r_eye_indices)
-        ear_left = compute_ear_from_landmarks(self.prev_pts, l_eye_indices)
-        mar = compute_mar_from_landmarks(self.prev_pts)
+        ear_right = min(
+            compute_ear_from_landmarks(self.prev_pts, r_eye_indices),
+            compute_ear_from_landmarks(raw_pts, r_eye_indices)
+        )
+        ear_left = min(
+            compute_ear_from_landmarks(self.prev_pts, l_eye_indices),
+            compute_ear_from_landmarks(raw_pts, l_eye_indices)
+        )
+        mar = max(
+            compute_mar_from_landmarks(self.prev_pts),
+            compute_mar_from_landmarks(raw_pts)
+        )
         head_pose = compute_head_pose_from_landmarks(self.prev_pts)
 
         ret["ear_right"] = round(ear_right, 4)
@@ -417,36 +432,21 @@ class ReferImage:
         ret["mar"] = round(mar, 4)
         ret["head_pose"] = head_pose
 
-        # CNN classification (index 0 = Open, index 1 = Closed)
-        cnn_r_closed = (np.argmax(right_eye_output, axis=0) == 1)
-        cnn_l_closed = (np.argmax(left_eye_output, axis=0) == 1)
+        # Geometric EAR is the primary ground truth (since eye_model.onnx is biased toward class 1)
+        # Normal open eyes on WFLW 98 landmarks are ~0.24 - 0.34; closed eyes are < 0.21
+        ret["eye_right_status"] = 'C' if ear_right < 0.21 else 'O'
+        ret["eye_left_status"] = 'C' if ear_left < 0.21 else 'O'
 
-        # Robust multi-modal eye status determination (Geometric EAR + CNN)
-        # EAR threshold: < 0.19 is closed, > 0.23 is open, intermediate uses CNN
-        if ear_right < 0.19:
-            ret["eye_right_status"] = 'C'
-        elif ear_right > 0.23:
-            ret["eye_right_status"] = 'O'
-        else:
-            ret["eye_right_status"] = 'C' if cnn_r_closed else 'O'
-
-        if ear_left < 0.19:
-            ret["eye_left_status"] = 'C'
-        elif ear_left > 0.23:
-            ret["eye_left_status"] = 'O'
-        else:
-            ret["eye_left_status"] = 'C' if cnn_l_closed else 'O'
-
-        # If both eyes exhibit closure features
-        if (ear_right + ear_left) / 2.0 < 0.195:
+        # If average EAR across both eyes is below 0.215, mark both eyes closed
+        if (ear_right + ear_left) / 2.0 < 0.215:
             ret["eye_right_status"] = 'C'
             ret["eye_left_status"] = 'C'
 
-        # Mouth status (MAR > 0.45 is yawn, < 0.32 is normal, intermediate uses CNN)
+        # Mouth status: inner-lip compensated MAR > 0.36 is yawn ('O'), < 0.28 is closed ('C'), intermediate uses mouth CNN
         cnn_mouth_open = (np.argmax(mouth_output, axis=0) == 0)
-        if mar > 0.45:
+        if mar > 0.36:
             ret["mouth_status"] = 'O'
-        elif mar < 0.32:
+        elif mar < 0.28:
             ret["mouth_status"] = 'C'
         else:
             ret["mouth_status"] = 'O' if cnn_mouth_open else 'C'

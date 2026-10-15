@@ -52,6 +52,10 @@ export const Header: React.FC<HeaderProps> = ({
         return { title: 'Driver Management', subtitle: 'Personnel, RFID identification & vehicle assignments' };
       case 'geofencing':
         return { title: 'Geofencing Zones & Routes', subtitle: 'Area perimeter control and assigned route corridors' };
+      case 'monitoring':
+        return { title: 'AI Driver Fatigue Monitoring', subtitle: 'Real-time ONNX facial landmark & drowsiness detection' };
+      case 'sensors':
+        return { title: 'ESP32 Vehicle Sensors (BNO085 IMU + Ultrasonic Fuel)', subtitle: 'Real-time Wi-Fi IMU motion telemetry, harsh event detection & ultrasonic tank monitoring' };
       case 'fuel':
         return { title: 'Fuel Analytics & Refueling', subtitle: 'IoT capacitive sensor telemetry, theft diagnostics & refuel audit ledger' };
       case 'notifications':

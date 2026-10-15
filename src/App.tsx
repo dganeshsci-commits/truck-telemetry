@@ -41,7 +41,9 @@ import { FuelView } from './views/FuelView';
 import { NotificationsView } from './views/NotificationsView';
 import { SettingsView } from './views/SettingsView';
 import { DriverMonitoringView } from './views/DriverMonitoringView';
+import { VehicleSensorsView } from './views/VehicleSensorsView';
 import { driverMonitoringService } from './services/driverMonitoring';
+import { esp32SensorService } from './services/esp32SensorService';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<ActiveNavTab>('dashboard');
@@ -715,6 +717,10 @@ export default function App() {
               vehicles={vehicles}
               onTriggerAlert={handleTriggerAlert}
             />
+          )}
+
+          {activeTab === 'sensors' && (
+            <VehicleSensorsView />
           )}
 
           {activeTab === 'settings' && (

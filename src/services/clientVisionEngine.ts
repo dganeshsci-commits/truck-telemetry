@@ -38,12 +38,21 @@ function computeMar(pts: number[]): number {
   try {
     const left = { x: pts[76 * 2], y: pts[76 * 2 + 1] };
     const right = { x: pts[82 * 2], y: pts[82 * 2 + 1] };
+    const h = Math.hypot(left.x - right.x, left.y - right.y);
+    if (h < 0.001) return 0.0;
+
+    // Inner lip vertical distances: (89,95), (90,94), (91,93)
+    const v89_95 = Math.hypot(pts[89 * 2] - pts[95 * 2], pts[89 * 2 + 1] - pts[95 * 2 + 1]);
+    const v90_94 = Math.hypot(pts[90 * 2] - pts[94 * 2], pts[90 * 2 + 1] - pts[94 * 2 + 1]);
+    const v91_93 = Math.hypot(pts[91 * 2] - pts[93 * 2], pts[91 * 2 + 1] - pts[93 * 2 + 1]);
+    const innerMar = (v89_95 + v90_94 + v91_93) / (3.0 * h);
+
+    // Outer lip vertical distance: (79, 85) minus natural lip thickness baseline (~0.24)
     const top = { x: pts[79 * 2], y: pts[79 * 2 + 1] };
     const bot = { x: pts[85 * 2], y: pts[85 * 2 + 1] };
-    const h = Math.hypot(left.x - right.x, left.y - right.y);
-    const v = Math.hypot(top.x - bot.x, top.y - bot.y);
-    if (h < 0.001) return 0.0;
-    return v / h;
+    const outerMar = Math.hypot(top.x - bot.x, top.y - bot.y) / h;
+
+    return Math.max(innerMar * 1.45, Math.max(0, outerMar - 0.24) * 1.15);
   } catch {
     return 0.0;
   }
@@ -68,12 +77,12 @@ function computeHeadPose(pts: number[]) {
 
     const span_x = Math.max(Math.abs(x_cheek_l - x_cheek_r), 1.0);
     const nose_ratio = (x_nose - x_cheek_r) / span_x;
-    const yaw = (nose_ratio - 0.5) * 80.0;
+    const yaw = (nose_ratio - 0.5) * 90.0;
 
     const eye_y_mid = (y_eye_r + y_eye_l) / 2.0;
     const face_h = Math.max(Math.abs(y_chin - eye_y_mid), 1.0);
     const nose_v = (y_nose - eye_y_mid) / face_h;
-    const pitch = (nose_v - 0.45) * 75.0;
+    const pitch = (nose_v - 0.38) * 90.0;
 
     return {
       yaw: parseFloat(yaw.toFixed(1)),
@@ -87,9 +96,11 @@ function computeHeadPose(pts: number[]) {
 
 class ClientVisionEngine {
   private smoothedFaceBox: [number, number, number, number] | null = null;
+  private prevLandmarks: number[] = [];
   private consecutiveClosedFrames = 0;
   private consecutiveYawnFrames = 0;
   private consecutiveAwayFrames = 0;
+  private smoothedScore = 12;
   private eyeStatusBuffer: boolean[] = [];
   private maxBufferSize = 80;
   private framesSinceNoFace = 0;
@@ -97,10 +108,13 @@ class ClientVisionEngine {
   // WebAssembly ONNX sessions
   private faceDetectorSession: ort.InferenceSession | null = null;
   private pfldSession: ort.InferenceSession | null = null;
+  private mouthSession: ort.InferenceSession | null = null;
   private isModelLoading = false;
   private modelsLoaded = false;
   private cropCanvas: HTMLCanvasElement | null = null;
   private cropCtx: CanvasRenderingContext2D | null = null;
+  private mouthCanvas: HTMLCanvasElement | null = null;
+  private mouthCtx: CanvasRenderingContext2D | null = null;
 
   constructor() {
     this.initOnnxModels();
@@ -110,16 +124,19 @@ class ClientVisionEngine {
     if (this.isModelLoading || this.modelsLoaded || typeof window === 'undefined') return;
     this.isModelLoading = true;
     try {
-      ort.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.21.0/dist/';
+      // Load matching ONNX Runtime WebAssembly binaries from local /ort-wasm/ directory
+      ort.env.wasm.wasmPaths = '/ort-wasm/';
       ort.env.wasm.numThreads = 1;
 
-      const [faceSession, pfldSession] = await Promise.all([
+      const [faceSession, pfldSession, mouthSession] = await Promise.all([
         ort.InferenceSession.create('/models/version-slim-320.onnx', { executionProviders: ['wasm'] }),
-        ort.InferenceSession.create('/models/PFLD_GhostOne_112_1_opt_sim.onnx', { executionProviders: ['wasm'] })
+        ort.InferenceSession.create('/models/PFLD_GhostOne_112_1_opt_sim.onnx', { executionProviders: ['wasm'] }),
+        ort.InferenceSession.create('/models/mouth_model.onnx', { executionProviders: ['wasm'] }).catch(() => null)
       ]);
 
       this.faceDetectorSession = faceSession;
       this.pfldSession = pfldSession;
+      this.mouthSession = mouthSession;
       this.modelsLoaded = true;
       console.log('[ClientVisionEngine] Successfully loaded ONNX models in browser (WASM Accelerated)!');
     } catch (e) {
@@ -204,9 +221,20 @@ class ClientVisionEngine {
       }
     }
 
-    if (maxProb < 0.40 || maxIdx < 0) {
-      return null;
+    // When UltraFace-320 confirms no face in frame, return emptyResult directly (do not fabricate a face)
+    if (maxProb < 0.45 || maxIdx < 0) {
+      this.framesSinceNoFace++;
+      if (this.framesSinceNoFace > 2) {
+        this.smoothedFaceBox = null;
+        this.prevLandmarks = [];
+        this.consecutiveClosedFrames = 0;
+        this.consecutiveYawnFrames = 0;
+        this.consecutiveAwayFrames = 0;
+      }
+      return this.emptyResult();
     }
+
+    this.framesSinceNoFace = 0;
 
     let bx = Math.round(boxData[maxIdx * 4] * 320);
     let by = Math.round(boxData[maxIdx * 4 + 1] * 240);
@@ -222,7 +250,7 @@ class ClientVisionEngine {
     if (!this.smoothedFaceBox) {
       this.smoothedFaceBox = [bx, by, bw, bh];
     } else {
-      const alpha = 0.4;
+      const alpha = 0.55;
       this.smoothedFaceBox = [
         Math.round(this.smoothedFaceBox[0] * (1 - alpha) + bx * alpha),
         Math.round(this.smoothedFaceBox[1] * (1 - alpha) + by * alpha),
@@ -233,25 +261,48 @@ class ClientVisionEngine {
 
     const [sbx, sby, sbw, sbh] = this.smoothedFaceBox;
 
-    // Crop face for PFLD landmark model (112x112)
+    // Exact square letterbox crop matching Python cut_resize_letterbox(pil_img, face_box, (112, 112))
     if (!this.cropCanvas) {
       this.cropCanvas = document.createElement('canvas');
       this.cropCanvas.width = 112;
       this.cropCanvas.height = 112;
       this.cropCtx = this.cropCanvas.getContext('2d', { willReadFrequently: true });
     }
-
     if (!this.cropCtx) return null;
-    this.cropCtx.drawImage(canvas, sbx, sby, sbw, sbh, 0, 0, 112, 112);
+
+    const maxLen = Math.max(sbw, sbh);
+    const widthMargin = Math.floor((maxLen - sbw) / 2);
+    const heightMargin = Math.floor((maxLen - sbh) / 2);
+    const letterboxX = sbx - widthMargin;
+    const letterboxY = sby - heightMargin;
+    const scaleL = maxLen / 112.0;
+
+    // Fill with black margin and draw centered square crop scaled to 112x112
+    this.cropCtx.fillStyle = '#000000';
+    this.cropCtx.fillRect(0, 0, 112, 112);
+
+    const srcX = Math.max(0, letterboxX);
+    const srcY = Math.max(0, letterboxY);
+    const srcRight = Math.min(w, letterboxX + maxLen);
+    const srcBottom = Math.min(h, letterboxY + maxLen);
+    const srcW = Math.max(1, srcRight - srcX);
+    const srcH = Math.max(1, srcBottom - srcY);
+
+    const dstX = ((srcX - letterboxX) / maxLen) * 112.0;
+    const dstY = ((srcY - letterboxY) / maxLen) * 112.0;
+    const dstW = (srcW / maxLen) * 112.0;
+    const dstH = (srcH / maxLen) * 112.0;
+
+    this.cropCtx.drawImage(canvas, srcX, srcY, srcW, srcH, dstX, dstY, dstW, dstH);
     const cropData = this.cropCtx.getImageData(0, 0, 112, 112).data;
 
-    // Normalization for PFLD: (x / 255.0 - 0.5) / 0.5
+    // Normalization for PFLD: [0.0, 1.0] (matching ToTensor() and Python refer_image.py)
     const pfldChw = new Float32Array(3 * 112 * 112);
     const pfldPlane = 112 * 112;
     for (let i = 0; i < pfldPlane; i++) {
-      pfldChw[i] = (cropData[i * 4] / 255.0 - 0.5) / 0.5;
-      pfldChw[pfldPlane + i] = (cropData[i * 4 + 1] / 255.0 - 0.5) / 0.5;
-      pfldChw[pfldPlane * 2 + i] = (cropData[i * 4 + 2] / 255.0 - 0.5) / 0.5;
+      pfldChw[i] = cropData[i * 4] / 255.0;
+      pfldChw[pfldPlane + i] = cropData[i * 4 + 1] / 255.0;
+      pfldChw[pfldPlane * 2 + i] = cropData[i * 4 + 2] / 255.0;
     }
 
     const pfldFeeds: Record<string, ort.Tensor> = {};
@@ -259,55 +310,154 @@ class ClientVisionEngine {
     const pfldOutputs = await this.pfldSession.run(pfldFeeds);
     const landmarkPreds = pfldOutputs[this.pfldSession.outputNames[0]].data as Float32Array;
 
-    // Scale 98 landmarks back to canvas coordinates
-    const landmarks: number[] = [];
+    // Map 98 landmarks back to 320x240 frame coordinates with temporal smoothing
+    const rawLandmarks: number[] = [];
     for (let i = 0; i < 98; i++) {
-      const lx = sbx + landmarkPreds[i * 2] * sbw;
-      const ly = sby + landmarkPreds[i * 2 + 1] * sbh;
-      landmarks.push(Math.round(lx), Math.round(ly));
+      const lx = landmarkPreds[i * 2] * 112.0 * scaleL + letterboxX;
+      const ly = landmarkPreds[i * 2 + 1] * 112.0 * scaleL + letterboxY;
+      rawLandmarks.push(lx, ly);
     }
 
-    // Compute EAR, MAR, Head Pose from WFLW 98 landmarks
-    const earRight = computeEar(landmarks, [60, 61, 62, 63, 64, 65, 66, 67]);
-    const earLeft = computeEar(landmarks, [68, 69, 70, 71, 72, 73, 74, 75]);
-    const mar = computeMar(landmarks);
-    const headPose = computeHeadPose(landmarks);
-
-    const isLeftClosed = earLeft < 0.20;
-    const isRightClosed = earRight < 0.20;
-    const isEyesClosed = isLeftClosed && isRightClosed;
-
-    if (isEyesClosed || isLeftClosed || isRightClosed) {
-      this.consecutiveClosedFrames++;
+    if (this.prevLandmarks.length === 196) {
+      const noseJump = Math.hypot(
+        rawLandmarks[54 * 2] - this.prevLandmarks[54 * 2],
+        rawLandmarks[54 * 2 + 1] - this.prevLandmarks[54 * 2 + 1]
+      );
+      if (noseJump > 45) {
+        this.prevLandmarks = [...rawLandmarks];
+      } else {
+        const beta = 0.78;
+        for (let i = 0; i < 196; i++) {
+          this.prevLandmarks[i] = rawLandmarks[i] * beta + this.prevLandmarks[i] * (1 - beta);
+        }
+      }
     } else {
-      this.consecutiveClosedFrames = 0;
+      this.prevLandmarks = [...rawLandmarks];
+    }
+
+    const landmarks = this.prevLandmarks.map(v => Math.round(v * 10) / 10);
+
+    // Compute EAR, MAR, Head Pose from WFLW 98 landmarks (using min EAR of raw and smoothed for fast blink response)
+    const earRight = Math.min(
+      computeEar(this.prevLandmarks, [60, 61, 62, 63, 64, 65, 66, 67]),
+      computeEar(rawLandmarks, [60, 61, 62, 63, 64, 65, 66, 67])
+    );
+    const earLeft = Math.min(
+      computeEar(this.prevLandmarks, [68, 69, 70, 71, 72, 73, 74, 75]),
+      computeEar(rawLandmarks, [68, 69, 70, 71, 72, 73, 74, 75])
+    );
+    const mar = Math.max(computeMar(this.prevLandmarks), computeMar(rawLandmarks));
+    const headPose = computeHeadPose(this.prevLandmarks);
+
+    // Optional mouth CNN verification when MAR is in borderline [0.28, 0.36]
+    let cnnMouthOpen = false;
+    if (this.mouthSession && mar >= 0.28 && mar <= 0.36) {
+      try {
+        if (!this.mouthCanvas) {
+          this.mouthCanvas = document.createElement('canvas');
+          this.mouthCanvas.width = 64;
+          this.mouthCanvas.height = 64;
+          this.mouthCtx = this.mouthCanvas.getContext('2d', { willReadFrequently: true });
+        }
+        if (this.mouthCtx) {
+          const cutBias = 15;
+          const mx = this.prevLandmarks[76 * 2] - cutBias;
+          const my = this.prevLandmarks[79 * 2 + 1] - cutBias;
+          const mw = this.prevLandmarks[82 * 2] - this.prevLandmarks[76 * 2] + cutBias * 2;
+          const mh = this.prevLandmarks[85 * 2 + 1] - this.prevLandmarks[79 * 2 + 1] + cutBias * 1.5;
+          const mMax = Math.max(16, Math.max(mw, mh));
+          const mLx = mx - (mMax - mw) / 2;
+          const mLy = my - (mMax - mh) / 2;
+          this.mouthCtx.fillStyle = '#000000';
+          this.mouthCtx.fillRect(0, 0, 64, 64);
+          this.mouthCtx.drawImage(canvas, mLx, mLy, mMax, mMax, 0, 0, 64, 64);
+          const mData = this.mouthCtx.getImageData(0, 0, 64, 64).data;
+          const mChw = new Float32Array(3 * 64 * 64);
+          const mPlane = 64 * 64;
+          for (let i = 0; i < mPlane; i++) {
+            mChw[i] = mData[i * 4] / 255.0;
+            mChw[mPlane + i] = mData[i * 4 + 1] / 255.0;
+            mChw[mPlane * 2 + i] = mData[i * 4 + 2] / 255.0;
+          }
+          const mOut = await this.mouthSession.run({
+            [this.mouthSession.inputNames[0]]: new ort.Tensor('float32', mChw, [1, 3, 64, 64])
+          });
+          const mPred = mOut[this.mouthSession.outputNames[0]].data as Float32Array;
+          cnnMouthOpen = mPred[0] > mPred[1];
+        }
+      } catch {
+        // Ignore mouth CNN error and rely on inner-lip MAR
+      }
+    }
+
+    const avgEar = (earLeft + earRight) / 2.0;
+    const isLeftClosed = earLeft < 0.21 || avgEar < 0.215;
+    const isRightClosed = earRight < 0.21 || avgEar < 0.215;
+    const isEyesClosed = isLeftClosed && isRightClosed;
+    const eitherEyeClosed = isLeftClosed || isRightClosed;
+
+    if (isEyesClosed) {
+      this.consecutiveClosedFrames++;
+    } else if (eitherEyeClosed) {
+      this.consecutiveClosedFrames = Math.max(1, this.consecutiveClosedFrames);
+    } else {
+      this.consecutiveClosedFrames = Math.max(0, this.consecutiveClosedFrames - 2);
     }
 
     let mouthState: 'normal' | 'open' | 'yawn' = 'normal';
-    if (mar > 0.42) {
+    if (mar > 0.36 || cnnMouthOpen) {
       this.consecutiveYawnFrames++;
-      mouthState = this.consecutiveYawnFrames >= 2 ? 'yawn' : 'open';
-    } else if (mar > 0.28) {
+      mouthState = this.consecutiveYawnFrames >= 2 || mar > 0.42 ? 'yawn' : 'open';
+    } else if (mar > 0.24) {
       mouthState = 'open';
-      this.consecutiveYawnFrames = 0;
+      this.consecutiveYawnFrames = Math.max(0, this.consecutiveYawnFrames - 1);
     } else {
       mouthState = 'normal';
       this.consecutiveYawnFrames = 0;
     }
 
-    let score = 12;
-    if (this.consecutiveClosedFrames >= 6) {
-      score = Math.min(99, 70 + (this.consecutiveClosedFrames - 6) * 4);
-    } else if (isEyesClosed) {
-      score = 55;
-    } else if (isLeftClosed || isRightClosed) {
-      score = 35;
+    const lookingAway = Math.abs(headPose.yaw) > 28 || Math.abs(headPose.pitch) > 22;
+    if (lookingAway) {
+      this.consecutiveAwayFrames++;
+    } else {
+      this.consecutiveAwayFrames = Math.max(0, this.consecutiveAwayFrames - 1);
+    }
+
+    let targetScore = 12;
+    if (isEyesClosed) {
+      if (this.consecutiveClosedFrames <= 2) {
+        targetScore = 24;
+      } else if (this.consecutiveClosedFrames <= 5) {
+        targetScore = 38 + (this.consecutiveClosedFrames - 3) * 5;
+      } else if (this.consecutiveClosedFrames <= 10) {
+        targetScore = 54 + (this.consecutiveClosedFrames - 6) * 4;
+      } else {
+        targetScore = Math.min(99, 74 + (this.consecutiveClosedFrames - 10) * 3);
+      }
+    } else if (eitherEyeClosed) {
+      targetScore = 32;
     }
 
     if (mouthState === 'yawn') {
-      score = Math.max(score, 60);
+      targetScore = Math.max(targetScore, Math.min(82, 42 + this.consecutiveYawnFrames * 4));
+      if (isEyesClosed) {
+        targetScore = Math.min(99, targetScore + 18);
+      }
+    } else if (mouthState === 'open') {
+      targetScore = Math.max(targetScore, 22);
     }
 
+    if (lookingAway) {
+      targetScore = Math.max(targetScore, Math.min(78, 32 + this.consecutiveAwayFrames * 4));
+    }
+
+    if (targetScore >= this.smoothedScore) {
+      this.smoothedScore = targetScore;
+    } else {
+      this.smoothedScore = Math.max(targetScore, this.smoothedScore * 0.72 + targetScore * 0.28);
+    }
+
+    const score = Math.round(Math.min(99, Math.max(0, this.smoothedScore)));
     let fatigueState: ClientVisionResult['fatigueState'] = 'NORMAL';
     if (score >= 70) fatigueState = 'CRITICAL';
     else if (score >= 50) fatigueState = 'DROWSY';
@@ -321,9 +471,9 @@ class ClientVisionEngine {
       rightEye: isRightClosed ? 'closed' : 'open',
       mouthState,
       headPose,
-      earLeft: parseFloat(earLeft.toFixed(2)),
-      earRight: parseFloat(earRight.toFixed(2)),
-      mar: parseFloat(mar.toFixed(2)),
+      earLeft: parseFloat(earLeft.toFixed(3)),
+      earRight: parseFloat(earRight.toFixed(3)),
+      mar: parseFloat(mar.toFixed(3)),
       fatigueScore: score,
       fatigueState,
       modelEngine: 'BROWSER_ONNX_NEURAL (WASM 98-Point)'
@@ -486,13 +636,8 @@ class ClientVisionEngine {
       }
     }
 
-    if (skinCount < 60) {
-      return [
-        Math.round(w * 0.28),
-        Math.round(h * 0.18),
-        Math.round(w * 0.44),
-        Math.round(h * 0.62)
-      ];
+    if (skinCount < 90) {
+      return null;
     }
 
     xs.sort((a, b) => a - b);

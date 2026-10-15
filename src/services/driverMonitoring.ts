@@ -6,10 +6,15 @@ class DriverMonitoringService {
   private settings: DriverMonitoringSettings;
   private subscribers: ((data: DriverMonitoringData) => void)[] = [];
   private intervalId: NodeJS.Timeout | null = null;
-  private useClientVisionFallback = false;
-  
-  // PERCLOS calculation history
+  private backendFallbackUntil = 0;
+
+  // PERCLOS & blink/yawn tracking history
   private eyeStatusHistory: { timestamp: number; isOpen: boolean }[] = [];
+  private blinkTimestamps: number[] = [];
+  private wasEyesClosed = false;
+  private eyeClosedStartTime = 0;
+  private wasYawning = false;
+  private yawnStartTime = 0;
 
   constructor() {
     this.settings = {
@@ -25,7 +30,7 @@ class DriverMonitoringService {
       },
       cameraFps: 30,
       inferenceFps: 10,
-      mode: 'DEMO',
+      mode: 'LAPTOP_WEBCAM',
       backendUrl: 'http://localhost:8000'
     };
 
@@ -49,7 +54,7 @@ class DriverMonitoringService {
       lookingAway: false,
       fatigueScore: 0,
       fatigueState: 'NORMAL',
-      inferenceMode: 'DEMO',
+      inferenceMode: 'LAPTOP_WEBCAM',
       cameraStatus: 'DISCONNECTED',
       aiBackendStatus: 'CONNECTED',
       isModelOnline: true,
@@ -92,7 +97,7 @@ class DriverMonitoringService {
     this.data.isModelOnline = this.data.isModelOnline !== false;
     this.data.aiBackendStatus = 'CONNECTED';
     if (!this.data.modelEngine || this.data.modelEngine === 'OFFLINE') {
-      this.data.modelEngine = 'BROWSER_EDGE_AI (Vercel Native)';
+      this.data.modelEngine = 'BROWSER_ONNX_NEURAL (WASM 98-Point)';
     }
     this.notify();
   }
@@ -150,6 +155,10 @@ class DriverMonitoringService {
   public setMode(mode: "DEMO" | "LAPTOP_WEBCAM" | "RASPBERRY_PI_LIVE") {
     this.settings.mode = mode;
     this.data.inferenceMode = mode;
+    this.eyeStatusHistory = [];
+    this.blinkTimestamps = [];
+    this.wasEyesClosed = false;
+    this.wasYawning = false;
     
     // Reset data when switching modes
     if (mode === 'DEMO') {
@@ -183,6 +192,37 @@ class DriverMonitoringService {
   private isProcessing = false;
   private lastProcessTime = 0;
 
+  private updateTemporalMetrics(now: number) {
+    // 1. Track blink transitions and blink rate (blinks per minute)
+    const eyesClosed = this.data.faceDetected && (this.data.leftEye === 'closed' && this.data.rightEye === 'closed');
+    if (eyesClosed && !this.wasEyesClosed) {
+      this.wasEyesClosed = true;
+      this.eyeClosedStartTime = now;
+    } else if (!eyesClosed && this.wasEyesClosed) {
+      const closedDurationMs = now - this.eyeClosedStartTime;
+      this.wasEyesClosed = false;
+      // Count natural & drowsy blinks between 60ms and 1500ms
+      if (closedDurationMs >= 60 && closedDurationMs <= 1500) {
+        this.blinkTimestamps.push(now);
+      }
+    }
+    this.blinkTimestamps = this.blinkTimestamps.filter(ts => now - ts < 60000);
+    this.data.blinkRate = this.blinkTimestamps.length;
+
+    // 2. Track yawn rising-edge count and duration (seconds)
+    const isYawning = this.data.faceDetected && this.data.yawnDetected;
+    if (isYawning && !this.wasYawning) {
+      this.wasYawning = true;
+      this.yawnStartTime = now;
+      this.data.yawnCount++;
+      this.data.yawnDuration = 0.2;
+    } else if (isYawning && this.wasYawning) {
+      this.data.yawnDuration = parseFloat(((now - this.yawnStartTime) / 1000).toFixed(1));
+    } else if (!isYawning && this.wasYawning) {
+      this.wasYawning = false;
+    }
+  }
+
   public async processFrame(canvas: HTMLCanvasElement) {
     if (this.settings.mode === 'DEMO') return;
     if (!this.data.isModelOnline) return;
@@ -194,20 +234,20 @@ class DriverMonitoringService {
     this.isProcessing = true;
     this.lastProcessTime = now;
 
-    // Detect if running on Vercel cloud or if client fallback is active
+    // Detect if running on Vercel cloud or if temporary backend retry cooldown is active
     const isVercelHost = typeof window !== 'undefined' && (
       window.location.hostname.includes('vercel.app') ||
       window.location.hostname.includes('.run.app')
     );
 
-    if (this.useClientVisionFallback || isVercelHost) {
+    if (isVercelHost || now < this.backendFallbackUntil) {
       await this.applyClientVision(canvas);
       this.isProcessing = false;
       return;
     }
     
     try {
-      const imageData = canvas.toDataURL('image/jpeg', 0.6);
+      const imageData = canvas.toDataURL('image/jpeg', 0.65);
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 2000);
       
@@ -239,13 +279,35 @@ class DriverMonitoringService {
         return;
       }
 
-      // If backend did not detect face or eyes are unknown, fall back to high-speed client vision engine
-      if (!result.faceDetected || result.leftEye === 'unknown' || result.rightEye === 'unknown') {
+      // If local server indicates Python backend is not running, delegate to browser WASM ONNX engine
+      if (result.modelEngine === 'CLIENT_BROWSER_VISION') {
+        this.backendFallbackUntil = Date.now() + 4000;
         await this.applyClientVision(canvas);
         return;
       }
+
+      // If Python ONNX backend is online and genuinely reports no face detected, respect that!
+      if (!result.faceDetected) {
+        this.data.faceDetected = false;
+        this.data.faceBox = undefined;
+        this.data.faceLandmarks = undefined;
+        this.data.leftEye = 'unknown';
+        this.data.rightEye = 'unknown';
+        this.data.mouthState = 'normal';
+        this.data.yawnDetected = false;
+        this.data.lookingAway = false;
+        this.data.fatigueScore = 0;
+        this.data.fatigueState = 'NORMAL';
+        this.data.aiBackendStatus = 'CONNECTED';
+        this.data.isModelOnline = true;
+        if (result.modelEngine) {
+          this.data.modelEngine = result.modelEngine;
+        }
+        this.updateTemporalMetrics(now);
+        return;
+      }
       
-      // Update data with real inference results
+      // Update data with real Python ONNX inference results
       this.data.faceDetected = true;
       this.data.faceBox = result.faceBox;
       this.data.faceLandmarks = result.faceLandmarks;
@@ -268,16 +330,13 @@ class DriverMonitoringService {
       if (result.modelEngine) {
         this.data.modelEngine = result.modelEngine;
       }
-      
-      if (this.data.yawnDetected) {
-        this.data.yawnCount++;
-      }
 
-      this.data.lookingAway = Math.abs(this.data.headPose.yaw) > 30 || Math.abs(this.data.headPose.pitch) > 25;
+      this.data.lookingAway = Math.abs(this.data.headPose.yaw) > 28 || Math.abs(this.data.headPose.pitch) > 22;
+      this.updateTemporalMetrics(now);
 
     } catch {
-      // Backend unavailable or running on Vercel: Switch immediately to client vision engine!
-      this.useClientVisionFallback = true;
+      // Backend temporarily unavailable: use client WASM ONNX engine for 5 seconds, then retry backend
+      this.backendFallbackUntil = Date.now() + 5000;
       await this.applyClientVision(canvas);
     } finally {
       this.isProcessing = false;
@@ -287,6 +346,7 @@ class DriverMonitoringService {
   }
 
   private async applyClientVision(canvas: HTMLCanvasElement) {
+    const now = Date.now();
     const res = await clientVisionEngine.analyze(canvas);
     this.data.faceDetected = res.faceDetected;
     this.data.faceBox = res.faceBox;
@@ -302,13 +362,13 @@ class DriverMonitoringService {
     this.data.isModelOnline = true;
     this.data.modelEngine = res.modelEngine;
 
-    if (this.data.yawnDetected) {
-      this.data.yawnCount++;
+    if (res.headPose && res.faceDetected) {
+      this.data.lookingAway = Math.abs(res.headPose.yaw) > 28 || Math.abs(res.headPose.pitch) > 22;
+    } else {
+      this.data.lookingAway = false;
     }
 
-    if (res.headPose) {
-      this.data.lookingAway = Math.abs(res.headPose.yaw) > 30 || Math.abs(res.headPose.pitch) > 25;
-    }
+    this.updateTemporalMetrics(now);
     this.data.timestamp = new Date().toISOString();
     this.notify();
   }
@@ -326,7 +386,7 @@ class DriverMonitoringService {
     // Clean old history
     this.eyeStatusHistory = this.eyeStatusHistory.filter(h => now - h.timestamp < windowMs);
 
-    if (this.eyeStatusHistory.length > 10) {
+    if (this.eyeStatusHistory.length >= 4) {
       const closedCount = this.eyeStatusHistory.filter(h => !h.isOpen).length;
       this.data.perclos = (closedCount / this.eyeStatusHistory.length) * 100;
     }

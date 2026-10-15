@@ -208,6 +208,186 @@ router.post('/inference/frame', (req: Request, res: Response) => {
   }
 });
 
+// ============================================================================
+// ESP32 BNO085 IMU + Ultrasonic Fuel Sensor Telemetry (Serverless Memory Store)
+// ============================================================================
+const ESP32_EXPECTED_TOKEN = process.env.ESP32_DEVICE_TOKEN || 'fleetlogix-esp32-secret-2026';
+let latestSensorPacket: any = null;
+let sensorPacketsReceived = 0;
+let storedHistory: any[] = [];
+let storedEvents: any[] = [];
+let lastSavedHistoryMs = 0;
+
+function isFiniteOrNull(v: any, min: number, max: number): boolean {
+  if (v === null || v === undefined) return true;
+  return typeof v === 'number' && Number.isFinite(v) && v >= min && v <= max;
+}
+
+router.post('/sensors/telemetry', (req: Request, res: Response) => {
+  try {
+    const headerToken =
+      req.headers['x-device-token'] ||
+      (typeof req.headers.authorization === 'string' && req.headers.authorization.startsWith('Bearer ')
+        ? req.headers.authorization.slice(7).trim()
+        : undefined);
+    const bodyToken = req.body?.device_token;
+    const providedToken = (headerToken || bodyToken || '').toString().trim();
+
+    if (!providedToken || providedToken !== ESP32_EXPECTED_TOKEN) {
+      return res.status(401).json({
+        error: 'Unauthorized ESP32 device token',
+        hint: 'Provide valid X-Device-Token header or Authorization: Bearer <token>'
+      });
+    }
+
+    const body = req.body;
+    if (!body || typeof body !== 'object' || !body.device_id || !body.imu) {
+      return res.status(400).json({ error: 'Missing required device_id or imu payload' });
+    }
+
+    const imu = body.imu;
+    if (
+      !isFiniteOrNull(imu.accel_x, -200, 200) ||
+      !isFiniteOrNull(imu.accel_y, -200, 200) ||
+      !isFiniteOrNull(imu.accel_z, -200, 200) ||
+      !isFiniteOrNull(imu.gyro_x, -2500, 2500) ||
+      !isFiniteOrNull(imu.gyro_y, -2500, 2500) ||
+      !isFiniteOrNull(imu.gyro_z, -2500, 2500)
+    ) {
+      return res.status(400).json({ error: 'IMU values out of physical bounds' });
+    }
+
+    const fuel = body.fuel || {};
+    if (!isFiniteOrNull(fuel.distance_cm, 0, 1000)) {
+      return res.status(400).json({ error: 'Fuel distance_cm out of bounds (0-1000 cm)' });
+    }
+
+    const nowIso = new Date().toISOString();
+    const nowMs = Date.now();
+    const clientIp =
+      body.ip_address ||
+      (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() ||
+      'ESP32-WiFi';
+
+    const sanitizedPacket = {
+      device_id: String(body.device_id).slice(0, 64),
+      vehicle_id: String(body.vehicle_id || 'veh-1').slice(0, 64),
+      timestamp: body.timestamp || nowIso,
+      received_at: nowIso,
+      sensor_timestamp_ms: typeof body.sensor_timestamp_ms === 'number' ? body.sensor_timestamp_ms : nowMs,
+      wifi_rssi_dbm: typeof body.wifi_rssi_dbm === 'number' ? body.wifi_rssi_dbm : null,
+      ip_address: clientIp,
+      is_simulated: Boolean(body.is_simulated),
+      imu: {
+        accel_x: typeof imu.accel_x === 'number' ? imu.accel_x : null,
+        accel_y: typeof imu.accel_y === 'number' ? imu.accel_y : null,
+        accel_z: typeof imu.accel_z === 'number' ? imu.accel_z : null,
+        lin_accel_x: typeof imu.lin_accel_x === 'number' ? imu.lin_accel_x : null,
+        lin_accel_y: typeof imu.lin_accel_y === 'number' ? imu.lin_accel_y : null,
+        lin_accel_z: typeof imu.lin_accel_z === 'number' ? imu.lin_accel_z : null,
+        gyro_x: typeof imu.gyro_x === 'number' ? imu.gyro_x : null,
+        gyro_y: typeof imu.gyro_y === 'number' ? imu.gyro_y : null,
+        gyro_z: typeof imu.gyro_z === 'number' ? imu.gyro_z : null,
+        roll: typeof imu.roll === 'number' ? imu.roll : null,
+        pitch: typeof imu.pitch === 'number' ? imu.pitch : null,
+        yaw: typeof imu.yaw === 'number' ? imu.yaw : null,
+        unit_acceleration: 'm/s^2',
+        unit_angular_velocity: 'deg/s',
+        status: imu.status || 'connected'
+      },
+      fuel: {
+        distance_cm: typeof fuel.distance_cm === 'number' ? fuel.distance_cm : null,
+        raw_distance_cm: typeof fuel.raw_distance_cm === 'number' ? fuel.raw_distance_cm : (typeof fuel.distance_cm === 'number' ? fuel.distance_cm : null),
+        level_percent: typeof fuel.level_percent === 'number' ? fuel.level_percent : null,
+        volume_litres: typeof fuel.volume_litres === 'number' ? fuel.volume_litres : null,
+        low_fuel_warning: Boolean(fuel.low_fuel_warning),
+        status: fuel.status || (typeof fuel.distance_cm === 'number' ? 'connected' : 'disconnected'),
+        error_message: fuel.error_message || null
+      },
+      events: body.events || {
+        driving_state: 'normal',
+        latest_event: null,
+        detector_mode: 'THRESHOLD_PROTOTYPE',
+        orientation_calibrated: false
+      }
+    };
+
+    latestSensorPacket = sanitizedPacket;
+    sensorPacketsReceived++;
+
+    if (nowMs - lastSavedHistoryMs >= 2000) {
+      lastSavedHistoryMs = nowMs;
+      storedHistory.push({
+        timeLabel: new Date(nowIso).toLocaleTimeString(),
+        timestampMs: nowMs,
+        isoTimestamp: nowIso,
+        accel_x: sanitizedPacket.imu.accel_x,
+        accel_y: sanitizedPacket.imu.accel_y,
+        accel_z: sanitizedPacket.imu.accel_z,
+        lin_accel_x: sanitizedPacket.imu.lin_accel_x,
+        lin_accel_y: sanitizedPacket.imu.lin_accel_y,
+        lin_accel_z: sanitizedPacket.imu.lin_accel_z,
+        gyro_x: sanitizedPacket.imu.gyro_x,
+        gyro_y: sanitizedPacket.imu.gyro_y,
+        gyro_z: sanitizedPacket.imu.gyro_z,
+        roll: sanitizedPacket.imu.roll,
+        pitch: sanitizedPacket.imu.pitch,
+        yaw: sanitizedPacket.imu.yaw,
+        distance_cm: sanitizedPacket.fuel.distance_cm,
+        level_percent: sanitizedPacket.fuel.level_percent,
+        volume_litres: sanitizedPacket.fuel.volume_litres,
+        driving_state: sanitizedPacket.events?.driving_state || 'normal',
+        is_simulated: sanitizedPacket.is_simulated
+      });
+      if (storedHistory.length > 500) storedHistory = storedHistory.slice(-500);
+      if (sanitizedPacket.events?.latest_event) {
+        storedEvents.unshift(sanitizedPacket.events.latest_event);
+        if (storedEvents.length > 100) storedEvents = storedEvents.slice(0, 100);
+      }
+    }
+
+    return res.status(200).json({
+      status: 'ok',
+      received_at: nowIso,
+      packets_received: sensorPacketsReceived
+    });
+  } catch (err: any) {
+    return res.status(500).json({ error: 'Internal server error', details: err?.message });
+  }
+});
+
+router.get('/sensors/latest', (_req: Request, res: Response) => {
+  const now = Date.now();
+  const lastMs = latestSensorPacket?.received_at
+    ? new Date(latestSensorPacket.received_at).getTime()
+    : 0;
+  const ageMs = lastMs > 0 ? now - lastMs : null;
+  const isConnected = ageMs !== null && ageMs < 10000;
+
+  res.json({
+    status: 'ok',
+    connected: isConnected,
+    age_ms: ageMs,
+    packets_received: sensorPacketsReceived,
+    latest: latestSensorPacket
+  });
+});
+
+router.get('/sensors/history', (_req: Request, res: Response) => {
+  res.json({
+    status: 'ok',
+    count: storedHistory.length,
+    history: storedHistory,
+    events: storedEvents
+  });
+});
+
+router.delete('/sensors/history', (_req: Request, res: Response) => {
+  storedHistory = [];
+  storedEvents = [];
+  res.json({ status: 'ok', message: 'Sensor history cleared' });
+});
+
 // Support both /api/... and direct routing in serverless
 app.use('/api', router);
 app.use('/', router);

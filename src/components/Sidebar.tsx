@@ -10,7 +10,8 @@ import {
   Radio,
   ChevronRight,
   ShieldCheck,
-  Eye
+  Eye,
+  Cpu
 } from 'lucide-react';
 import { ActiveNavTab, Vehicle } from '../types';
 
@@ -63,6 +64,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
       label: 'Driver Monitoring',
       icon: Eye,
       badge: null
+    },
+    {
+      id: 'sensors' as ActiveNavTab,
+      label: 'Vehicle Sensors',
+      icon: Cpu,
+      badge: 'ESP32',
+      badgeColor: 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
     },
     {
       id: 'fuel' as ActiveNavTab,

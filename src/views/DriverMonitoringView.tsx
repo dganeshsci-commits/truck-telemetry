@@ -51,6 +51,7 @@ export const DriverMonitoringView: React.FC<DriverMonitoringViewProps> = ({
   const [safetyEvents, setSafetyEvents] = useState<DriverSafetyEvent[]>([]);
   const [isTogglingModel, setIsTogglingModel] = useState(false);
   const [modelToast, setModelToast] = useState<{ message: string; type: 'success' | 'info' } | null>(null);
+  const lastEventTimeRef = React.useRef<Record<string, number>>({});
 
   // Subscribe to monitoring data
   useEffect(() => {
@@ -67,30 +68,58 @@ export const DriverMonitoringView: React.FC<DriverMonitoringViewProps> = ({
         return newHistory;
       });
 
-      // Check for alert triggers (simplification)
-      if (data.fatigueState === 'CRITICAL' && !safetyEvents.some(e => e.eventType === 'Critical Drowsiness' && e.status === 'Active')) {
-          const newEvent: DriverSafetyEvent = {
-            id: `event-${Date.now()}`,
-            timestamp: new Date().toLocaleTimeString(),
-            driverName: drivers.find(d => d.id === data.driverId)?.name || 'Unknown',
-            vehiclePlate: vehicles.find(v => v.id === data.vehicleId)?.plateNumber || 'Unknown',
-            eventType: 'Critical Drowsiness',
-            severity: 'critical',
-            duration: 'Active',
-            status: 'Active'
-          };
-          setSafetyEvents(prev => [newEvent, ...prev]);
-          
+      const now = Date.now();
+      const driverName = drivers.find(d => d.id === data.driverId)?.name || 'Unknown';
+      const vehiclePlate = vehicles.find(v => v.id === data.vehicleId)?.plateNumber || 'TN-01-AB-4821';
+
+      const recordSafetyEvent = (
+        eventType: DriverSafetyEvent['eventType'],
+        severity: DriverSafetyEvent['severity'],
+        durationLabel: string,
+        triggerGlobalAlert = false
+      ) => {
+        const lastTs = lastEventTimeRef.current[eventType] || 0;
+        if (now - lastTs < 10000) return;
+        lastEventTimeRef.current[eventType] = now;
+
+        const newEvent: DriverSafetyEvent = {
+          id: `event-${now}-${Math.random().toString(36).slice(2, 6)}`,
+          timestamp: new Date().toLocaleTimeString(),
+          driverName,
+          vehiclePlate,
+          eventType,
+          severity,
+          duration: durationLabel,
+          status: 'Active'
+        };
+        setSafetyEvents(prev => [newEvent, ...prev].slice(0, 25));
+
+        if (triggerGlobalAlert) {
           onTriggerAlert({
-            id: `alert-${Date.now()}`,
+            id: `alert-${now}`,
             timestamp: new Date().toLocaleTimeString(),
             vehicleId: data.vehicleId,
-            vehiclePlate: newEvent.vehiclePlate,
+            vehiclePlate,
             alertType: 'Drowsiness Detected',
-            message: `Critical fatigue detected for driver ${newEvent.driverName}. Immediate attention required.`,
-            severity: 'critical',
+            message: `${eventType} detected for driver ${driverName} (Score: ${data.fatigueScore}). Immediate attention required.`,
+            severity: severity === 'critical' ? 'critical' : 'warning',
             status: 'New'
           });
+        }
+      };
+
+      if (data.fatigueState === 'CRITICAL') {
+        recordSafetyEvent('Critical Drowsiness', 'critical', 'Sustained', true);
+      } else if (data.fatigueState === 'DROWSY') {
+        recordSafetyEvent('Drowsiness Detected', 'high', 'Active', false);
+      }
+
+      if (data.yawnDetected) {
+        recordSafetyEvent('Yawning Detected', 'medium', `${Math.max(1.5, data.yawnDuration).toFixed(1)}s`, false);
+      }
+
+      if (data.lookingAway) {
+        recordSafetyEvent('Driver Looking Away', 'low', `${Math.abs(data.headPose.yaw).toFixed(0)}° Yaw`, false);
       }
     });
 
@@ -106,6 +135,9 @@ export const DriverMonitoringView: React.FC<DriverMonitoringViewProps> = ({
   const currentVehicle = vehicles.find(v => v.id === monitoringData.vehicleId);
 
   const handleSimulate = useCallback((event: any) => {
+    if (driverMonitoringService.getSettings().mode !== 'DEMO') {
+      driverMonitoringService.setMode('DEMO');
+    }
     driverMonitoringService.simulateEvent(event);
   }, []);
 
@@ -378,32 +410,28 @@ export const DriverMonitoringView: React.FC<DriverMonitoringViewProps> = ({
              <div className="grid grid-cols-2 gap-2">
                 <button 
                   onClick={() => handleSimulate('blink')}
-                  disabled={monitoringData.inferenceMode !== 'DEMO'}
-                  className="flex items-center justify-center gap-2 px-3 py-2 rounded-xl bg-slate-800/50 border border-slate-700 text-slate-300 text-[10px] font-bold uppercase tracking-widest hover:bg-slate-700 hover:text-white transition-all disabled:opacity-30 disabled:cursor-not-allowed"
+                  className="flex items-center justify-center gap-2 px-3 py-2 rounded-xl bg-slate-800/50 border border-slate-700 text-slate-300 text-[10px] font-bold uppercase tracking-widest hover:bg-slate-700 hover:text-white transition-all"
                 >
                   <Play className="w-3 h-3 text-blue-400" />
                   Simulate Blink
                 </button>
                 <button 
                   onClick={() => handleSimulate('yawn')}
-                  disabled={monitoringData.inferenceMode !== 'DEMO'}
-                  className="flex items-center justify-center gap-2 px-3 py-2 rounded-xl bg-slate-800/50 border border-slate-700 text-slate-300 text-[10px] font-bold uppercase tracking-widest hover:bg-slate-700 hover:text-white transition-all disabled:opacity-30 disabled:cursor-not-allowed"
+                  className="flex items-center justify-center gap-2 px-3 py-2 rounded-xl bg-slate-800/50 border border-slate-700 text-slate-300 text-[10px] font-bold uppercase tracking-widest hover:bg-slate-700 hover:text-white transition-all"
                 >
                   <Play className="w-3 h-3 text-amber-400" />
                   Simulate Yawn
                 </button>
                 <button 
                   onClick={() => handleSimulate('longEyeClosure')}
-                  disabled={monitoringData.inferenceMode !== 'DEMO'}
-                  className="flex items-center justify-center gap-2 px-3 py-2 rounded-xl bg-slate-800/50 border border-slate-700 text-slate-300 text-[10px] font-bold uppercase tracking-widest hover:bg-slate-700 hover:text-white transition-all disabled:opacity-30 disabled:cursor-not-allowed"
+                  className="flex items-center justify-center gap-2 px-3 py-2 rounded-xl bg-slate-800/50 border border-slate-700 text-slate-300 text-[10px] font-bold uppercase tracking-widest hover:bg-slate-700 hover:text-white transition-all"
                 >
                   <Play className="w-3 h-3 text-orange-400" />
                   Long Eye Closure
                 </button>
                 <button 
                   onClick={() => handleSimulate('lookingAway')}
-                  disabled={monitoringData.inferenceMode !== 'DEMO'}
-                  className="flex items-center justify-center gap-2 px-3 py-2 rounded-xl bg-slate-800/50 border border-slate-700 text-slate-300 text-[10px] font-bold uppercase tracking-widest hover:bg-slate-700 hover:text-white transition-all disabled:opacity-30 disabled:cursor-not-allowed"
+                  className="flex items-center justify-center gap-2 px-3 py-2 rounded-xl bg-slate-800/50 border border-slate-700 text-slate-300 text-[10px] font-bold uppercase tracking-widest hover:bg-slate-700 hover:text-white transition-all"
                 >
                   <Play className="w-3 h-3 text-indigo-400" />
                   Looking Away
@@ -413,16 +441,14 @@ export const DriverMonitoringView: React.FC<DriverMonitoringViewProps> = ({
              <div className="space-y-2 pt-2 border-t border-slate-800">
                 <button 
                   onClick={() => handleSimulate('drowsy')}
-                  disabled={monitoringData.inferenceMode !== 'DEMO'}
-                  className="w-full flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl bg-orange-500/10 border border-orange-500/30 text-orange-400 text-[10px] font-black uppercase tracking-widest hover:bg-orange-500/20 transition-all disabled:opacity-30 disabled:cursor-not-allowed"
+                  className="w-full flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl bg-orange-500/10 border border-orange-500/30 text-orange-400 text-[10px] font-black uppercase tracking-widest hover:bg-orange-500/20 transition-all"
                 >
                   <AlertCircle className="w-4 h-4" />
                   Trigger Drowsiness Risk
                 </button>
                 <button 
                   onClick={() => handleSimulate('critical')}
-                  disabled={monitoringData.inferenceMode !== 'DEMO'}
-                  className="w-full flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-400 text-[10px] font-black uppercase tracking-widest hover:bg-rose-500/20 transition-all shadow-[0_0_20px_rgba(244,63,94,0.1)] disabled:opacity-30 disabled:shadow-none disabled:cursor-not-allowed"
+                  className="w-full flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-400 text-[10px] font-black uppercase tracking-widest hover:bg-rose-500/20 transition-all shadow-[0_0_20px_rgba(244,63,94,0.1)]"
                 >
                   <ShieldCheck className="w-4 h-4" />
                   Simulate Critical Fatigue

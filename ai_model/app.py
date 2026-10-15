@@ -402,6 +402,16 @@ def switch_sample_status():
     return "success"
 
 
+# Temporal fatigue state tracker for /api/predict
+FATIGUE_TRACKER = {
+    "consecutive_closed": 0,
+    "consecutive_yawn": 0,
+    "consecutive_away": 0,
+    "smoothed_score": 12.0,
+    "last_frame_ts": 0.0
+}
+
+
 @app.route('/api/predict', methods=['POST'])
 def api_predict():
     try:
@@ -421,46 +431,115 @@ def api_predict():
         # Resize to model's expected size (320x240 as per repo constants)
         frame = cv2.resize(frame, (FRAME_WIDTH, FRAME_HEIGHT))
 
-        # Load models if not already loaded (simple singleton pattern)
+        # Load models if not already loaded (singleton pattern)
         if not hasattr(app, 'refer_handler'):
             app.refer_handler = ReferImage(session_type="onnx")
         
+        # Reset temporal counters if gap between frames > 4 seconds
+        now_ts = time.time()
+        if now_ts - FATIGUE_TRACKER["last_frame_ts"] > 4.0:
+            FATIGUE_TRACKER["consecutive_closed"] = 0
+            FATIGUE_TRACKER["consecutive_yawn"] = 0
+            FATIGUE_TRACKER["consecutive_away"] = 0
+            FATIGUE_TRACKER["smoothed_score"] = 12.0
+        FATIGUE_TRACKER["last_frame_ts"] = now_ts
+
         # Run inference
         refer_ret = app.refer_handler.refer(frame, FRAME_WIDTH, FRAME_HEIGHT)
         
-        # Prepare response
+        # Prepare response when no face is detected
         if not refer_ret["face_detect"]:
+            FATIGUE_TRACKER["consecutive_closed"] = 0
+            FATIGUE_TRACKER["consecutive_yawn"] = 0
+            FATIGUE_TRACKER["consecutive_away"] = 0
             return {
                 "faceDetected": False,
                 "fatigueScore": 0,
                 "fatigueState": "NORMAL"
             }
 
-        # Calculate fatigue score based on eye, mouth, and head pose states
+        # Extract eye, mouth, and head pose states
         eye_left_closed = (refer_ret["eye_left_status"] == "C")
         eye_right_closed = (refer_ret["eye_right_status"] == "C")
+        both_eyes_closed = eye_left_closed and eye_right_closed
+        either_eye_closed = eye_left_closed or eye_right_closed
+
         mar_val = float(refer_ret.get("mar", 0.0))
         mouth_raw = refer_ret.get("mouth_status", "C")
+        head_pose = refer_ret.get("head_pose", {"yaw": 0.0, "pitch": 0.0, "roll": 0.0})
+        yaw_val = abs(float(head_pose.get("yaw", 0.0)))
+        pitch_val = abs(float(head_pose.get("pitch", 0.0)))
 
-        if mouth_raw == "O" or mar_val > 0.42:
-            mouth_state = "yawn"
-        elif mar_val > 0.28:
+        # Update consecutive eye closure counter
+        if both_eyes_closed:
+            FATIGUE_TRACKER["consecutive_closed"] += 1
+        elif either_eye_closed:
+            FATIGUE_TRACKER["consecutive_closed"] = max(1, FATIGUE_TRACKER["consecutive_closed"])
+        else:
+            FATIGUE_TRACKER["consecutive_closed"] = max(0, FATIGUE_TRACKER["consecutive_closed"] - 2)
+
+        # Determine mouth state with temporal persistence
+        if mouth_raw == "O" or mar_val > 0.36:
+            FATIGUE_TRACKER["consecutive_yawn"] += 1
+            mouth_state = "yawn" if FATIGUE_TRACKER["consecutive_yawn"] >= 2 or mar_val > 0.42 else "open"
+        elif mar_val > 0.24:
             mouth_state = "open"
+            FATIGUE_TRACKER["consecutive_yawn"] = max(0, FATIGUE_TRACKER["consecutive_yawn"] - 1)
         else:
             mouth_state = "normal"
-        
-        score = 12
-        if eye_left_closed and eye_right_closed:
-            score += 55
-        elif eye_left_closed or eye_right_closed:
-            score += 35
+            FATIGUE_TRACKER["consecutive_yawn"] = 0
+
+        # Update head pose distraction counter
+        looking_away = (yaw_val > 28.0 or pitch_val > 22.0)
+        if looking_away:
+            FATIGUE_TRACKER["consecutive_away"] += 1
+        else:
+            FATIGUE_TRACKER["consecutive_away"] = max(0, FATIGUE_TRACKER["consecutive_away"] - 1)
+
+        # Compute target fatigue score combining eye closure duration, yawning, and head pose
+        closed_frames = FATIGUE_TRACKER["consecutive_closed"]
+        yawn_frames = FATIGUE_TRACKER["consecutive_yawn"]
+        away_frames = FATIGUE_TRACKER["consecutive_away"]
+
+        target_score = 12
+        if both_eyes_closed:
+            if closed_frames <= 2:
+                # Brief natural blink (100-200ms): small bump without false DROWSY alarm
+                target_score = 24
+            elif closed_frames <= 5:
+                # Prolonged blink / heavy eyelids (300-500ms) -> ATTENTION
+                target_score = 38 + (closed_frames - 3) * 5
+            elif closed_frames <= 10:
+                # Drowsy eye closure (600ms - 1.0s) -> DROWSY
+                target_score = 54 + (closed_frames - 6) * 4
+            else:
+                # Microsleep / critical eye closure (>1.0s) -> CRITICAL
+                target_score = min(99, 74 + (closed_frames - 10) * 3)
+        elif either_eye_closed:
+            target_score = 32
 
         if mouth_state == "yawn":
-            score += 30
+            yawn_score = min(82, 42 + yawn_frames * 4)
+            target_score = max(target_score, yawn_score)
+            if both_eyes_closed:
+                target_score = min(99, target_score + 18)
         elif mouth_state == "open":
-            score += 10
-        
-        score = min(99, max(0, score))
+            target_score = max(target_score, 22)
+
+        if looking_away:
+            away_score = min(78, 32 + away_frames * 4)
+            target_score = max(target_score, away_score)
+
+        # Smooth score recovery when driver returns to normal alert state
+        if target_score >= FATIGUE_TRACKER["smoothed_score"]:
+            FATIGUE_TRACKER["smoothed_score"] = float(target_score)
+        else:
+            FATIGUE_TRACKER["smoothed_score"] = max(
+                float(target_score),
+                FATIGUE_TRACKER["smoothed_score"] * 0.72 + float(target_score) * 0.28
+            )
+
+        score = int(round(min(99, max(0, FATIGUE_TRACKER["smoothed_score"]))))
         state = "NORMAL"
         if score >= 70:
             state = "CRITICAL"
@@ -476,7 +555,7 @@ def api_predict():
             "leftEye": "closed" if eye_left_closed else "open",
             "rightEye": "closed" if eye_right_closed else "open",
             "mouthState": mouth_state,
-            "headPose": refer_ret.get("head_pose", { "yaw": 0.0, "pitch": 0.0, "roll": 0.0 }),
+            "headPose": head_pose,
             "earLeft": float(refer_ret.get("ear_left", 0.0)),
             "earRight": float(refer_ret.get("ear_right", 0.0)),
             "mar": mar_val,
@@ -494,6 +573,13 @@ if __name__ == '__main__':
     IP_ADDRESS = get_net_card()
     log_info("IP_ADDRESS : " + IP_ADDRESS)
 
-    # 启动硬件监测现成
+    # Pre-initialize ONNX sessions at startup so first inference frame is instant
+    try:
+        app.refer_handler = ReferImage(session_type="onnx")
+        log_info("Pre-loaded ONNX fatigue detection models successfully.")
+    except Exception as init_err:
+        log_error(f"ONNX preload warning: {init_err}")
+
+    # 启动硬件监测线程
     _thread.start_new_thread(update_hw_status, ())
     app.run(host='0.0.0.0', port=5000, debug=False)

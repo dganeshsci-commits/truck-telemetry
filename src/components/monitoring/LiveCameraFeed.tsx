@@ -86,7 +86,12 @@ export const LiveCameraFeed: React.FC<LiveCameraFeedProps> = ({ data }) => {
     }
   }, [selectedDeviceId, isInIframe, refreshDevices]);
 
-  const stopCamera = useCallback(() => {
+  const userStoppedRef = useRef<boolean>(false);
+
+  const stopCamera = useCallback((manualStop = false) => {
+    if (manualStop) {
+      userStoppedRef.current = true;
+    }
     if (stream) {
       stream.getTracks().forEach(track => track.stop());
       setStream(null);
@@ -99,7 +104,8 @@ export const LiveCameraFeed: React.FC<LiveCameraFeedProps> = ({ data }) => {
   }, [stream]);
 
   const resetCamera = useCallback(() => {
-    stopCamera();
+    userStoppedRef.current = false;
+    stopCamera(false);
     setTimeout(() => {
       startCamera();
     }, 400);
@@ -118,9 +124,22 @@ export const LiveCameraFeed: React.FC<LiveCameraFeedProps> = ({ data }) => {
     }
   }, [stream]);
 
+  const isLiveMode = data.inferenceMode === 'LAPTOP_WEBCAM' || data.inferenceMode === 'RASPBERRY_PI_LIVE';
+  const isWebcam = data.inferenceMode === 'LAPTOP_WEBCAM';
+
+  // Auto-start camera when entering live mode
+  useEffect(() => {
+    if (isLiveMode && !stream && !error && !userStoppedRef.current) {
+      startCamera();
+    } else if (data.inferenceMode === 'DEMO') {
+      userStoppedRef.current = false;
+      stopCamera(false);
+    }
+  }, [isLiveMode, data.inferenceMode, stream, error, startCamera, stopCamera]);
+
   // Frame processing loop
   useEffect(() => {
-    if (stream && data.inferenceMode === 'LAPTOP_WEBCAM') {
+    if (stream && isLiveMode) {
       const process = () => {
         const video = videoRef.current;
         const canvas = canvasRef.current;
@@ -141,17 +160,7 @@ export const LiveCameraFeed: React.FC<LiveCameraFeedProps> = ({ data }) => {
         processingRef.current = null;
       }
     };
-  }, [stream, data.inferenceMode]);
-
-  useEffect(() => {
-    // If we switch away from a live mode, stop the camera
-    if (data.inferenceMode === 'DEMO') {
-      stopCamera();
-    }
-  }, [data.inferenceMode, stopCamera]);
-
-  const isLiveMode = data.inferenceMode === 'LAPTOP_WEBCAM' || data.inferenceMode === 'RASPBERRY_PI_LIVE';
-  const isWebcam = data.inferenceMode === 'LAPTOP_WEBCAM';
+  }, [stream, isLiveMode]);
 
   return (
     <div className="relative w-full aspect-video rounded-2xl overflow-hidden bg-slate-900 border border-slate-800 shadow-2xl group">
@@ -281,7 +290,10 @@ export const LiveCameraFeed: React.FC<LiveCameraFeedProps> = ({ data }) => {
 
               <div className="flex flex-col sm:flex-row items-center justify-center gap-2.5">
                 <button 
-                  onClick={() => startCamera()}
+                  onClick={() => {
+                    userStoppedRef.current = false;
+                    startCamera();
+                  }}
                   className="w-full sm:w-auto px-6 py-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-bold uppercase tracking-widest transition-all shadow-lg shadow-blue-600/20 flex items-center justify-center gap-2"
                 >
                   <Play className="w-4 h-4 fill-current" />
@@ -317,12 +329,21 @@ export const LiveCameraFeed: React.FC<LiveCameraFeedProps> = ({ data }) => {
               className="w-48 h-48 rounded-full object-cover border-4 border-blue-500/30 shadow-2xl relative z-10 grayscale-[0.2]"
             />
           </div>
-          <div className="text-center z-10">
-            <p className="text-sm font-bold text-blue-400 uppercase tracking-widest flex items-center gap-2 justify-center">
-              <Zap className="w-4 h-4" />
-              Demo Inference Mode
-            </p>
-            <p className="text-[11px] text-slate-500 mt-1 uppercase font-bold tracking-wider">Simulated AI Processing Pipeline</p>
+          <div className="text-center z-10 space-y-3">
+            <div>
+              <p className="text-sm font-bold text-blue-400 uppercase tracking-widest flex items-center gap-2 justify-center">
+                <Zap className="w-4 h-4" />
+                Demo Inference Mode
+              </p>
+              <p className="text-[11px] text-slate-500 mt-1 uppercase font-bold tracking-wider">Simulated AI Processing Pipeline</p>
+            </div>
+            <button
+              onClick={() => driverMonitoringService.setMode('LAPTOP_WEBCAM')}
+              className="pointer-events-auto inline-flex items-center gap-2 px-5 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-bold uppercase tracking-widest transition-all shadow-lg shadow-blue-600/25"
+            >
+              <Camera className="w-4 h-4" />
+              Switch to Live Webcam
+            </button>
           </div>
         </div>
       )}
@@ -420,7 +441,7 @@ export const LiveCameraFeed: React.FC<LiveCameraFeedProps> = ({ data }) => {
             <Activity className="w-4 h-4 animate-spin [animation-duration:3s]" />
           </button>
           <button 
-            onClick={stopCamera}
+            onClick={() => stopCamera(true)}
             className="p-2 bg-rose-600/90 hover:bg-rose-500 text-white rounded-lg transition-all shadow-lg border border-rose-500/50"
             title="Stop Camera"
           >

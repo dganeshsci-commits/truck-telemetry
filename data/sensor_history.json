@@ -1,0 +1,70 @@
+{
+  "updatedAt": "2026-10-12T17:28:00.431Z",
+  "latest": {
+    "device_id": "truck_esp32_01",
+    "vehicle_id": "veh-1",
+    "timestamp": "2026-10-12T22:58:00.2426132+05:30",
+    "received_at": "2026-10-12T17:28:00.395Z",
+    "sensor_timestamp_ms": 1791826080395,
+    "wifi_rssi_dbm": -54,
+    "ip_address": "127.0.0.1",
+    "is_simulated": false,
+    "imu": {
+      "accel_x": 0.24,
+      "accel_y": -0.11,
+      "accel_z": 9.81,
+      "lin_accel_x": 0.24,
+      "lin_accel_y": -0.11,
+      "lin_accel_z": 0,
+      "gyro_x": 1.2,
+      "gyro_y": -0.5,
+      "gyro_z": 3.8,
+      "roll": 1.4,
+      "pitch": -0.6,
+      "yaw": 88.2,
+      "unit_acceleration": "m/s^2",
+      "unit_angular_velocity": "deg/s",
+      "status": "connected"
+    },
+    "fuel": {
+      "distance_cm": 18.4,
+      "raw_distance_cm": 18.4,
+      "level_percent": 66.5,
+      "volume_litres": 199.5,
+      "low_fuel_warning": false,
+      "status": "connected",
+      "error_message": null
+    },
+    "events": {
+      "driving_state": "normal",
+      "latest_event": null,
+      "detector_mode": "THRESHOLD_PROTOTYPE",
+      "orientation_calibrated": false
+    }
+  },
+  "history": [
+    {
+      "timeLabel": "10:58:00 pm",
+      "timestampMs": 1791826080395,
+      "isoTimestamp": "2026-10-12T17:28:00.395Z",
+      "accel_x": 0.24,
+      "accel_y": -0.11,
+      "accel_z": 9.81,
+      "lin_accel_x": 0.24,
+      "lin_accel_y": -0.11,
+      "lin_accel_z": 0,
+      "gyro_x": 1.2,
+      "gyro_y": -0.5,
+      "gyro_z": 3.8,
+      "roll": 1.4,
+      "pitch": -0.6,
+      "yaw": 88.2,
+      "distance_cm": 18.4,
+      "level_percent": 66.5,
+      "volume_litres": 199.5,
+      "driving_state": "normal",
+      "is_simulated": false
+    }
+  ],
+  "events": []
+}

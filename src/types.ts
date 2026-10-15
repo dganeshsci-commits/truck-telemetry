@@ -321,6 +321,130 @@ export type ActiveNavTab =
   | 'drivers'
   | 'geofencing'
   | 'monitoring'
+  | 'sensors'
   | 'fuel'
   | 'notifications'
   | 'settings';
+
+export type SensorConnectionState = 'connected' | 'disconnected' | 'stale' | 'error' | 'initializing';
+
+export type DrivingEventState =
+  | 'normal'
+  | 'harsh_braking'
+  | 'harsh_acceleration'
+  | 'harsh_cornering'
+  | 'excessive_vibration';
+
+export type AxisMappingOption = '+X' | '-X' | '+Y' | '-Y' | '+Z' | '-Z';
+
+export interface ImuOrientationConfig {
+  isCalibrated: boolean;
+  longitudinalAxis: AxisMappingOption; // Forward / braking axis once calibrated
+  lateralAxis: AxisMappingOption;      // Left / right cornering axis once calibrated
+  verticalAxis: AxisMappingOption;     // Vertical axis
+  accelBiasX: number;
+  accelBiasY: number;
+  accelBiasZ: number;
+  useLinearAccelerationForEvents: boolean;
+}
+
+export interface DrivingEventThresholds {
+  harshBrakingMps2: number;       // e.g. -3.5 m/s² along calibrated longitudinal axis
+  harshAccelerationMps2: number;  // e.g. +3.2 m/s² along calibrated longitudinal axis
+  harshCorneringMps2: number;     // e.g. 3.0 m/s² magnitude along calibrated lateral axis
+  harshCorneringGyroDps: number;  // e.g. 45.0 °/s yaw rate
+  excessiveVibrationRmsMps2: number; // e.g. 4.5 m/s² high-frequency RMS / peak deviation
+  minPersistenceSamples: number;  // Consecutive samples required to trigger an event
+  emaAlpha: number;               // Low-pass filter smoothing factor (0.1 - 1.0)
+}
+
+export interface TankCalibrationPoint {
+  distanceCm: number;
+  levelPercent: number;
+  volumeLitres?: number;
+}
+
+export interface FuelCalibrationConfig {
+  emptyDistanceCm: number;        // Distance from sensor to tank bottom (0%)
+  fullDistanceCm: number;         // Distance from sensor to full fuel surface (100%)
+  tankCapacityLitres: number | null; // Null if unknown; only compute litres when geometry calibrated
+  isTankGeometryCalibrated: boolean;
+  lowFuelThresholdPercent: number;
+  minValidDistanceCm: number;     // e.g. 2.0 cm (sensor blind zone)
+  maxValidDistanceCm: number;     // e.g. 400.0 cm
+  smoothingWindowSize: number;    // Moving median/average filter window
+  useCalibrationTable: boolean;   // Use non-linear table for irregular tank shapes
+  calibrationTable: TankCalibrationPoint[];
+}
+
+export interface StorageRetentionConfig {
+  storageIntervalMs: number;      // Minimum interval between persisted history samples (e.g. 2000 ms)
+  maxHistoricalSamples: number;   // Max retained telemetry points (e.g. 2000)
+  maxEventRecords: number;        // Max retained driving event records (e.g. 500)
+  staleTimeoutMs: number;         // Mark data stale after N ms without ESP32 packets (e.g. 5000 ms)
+}
+
+export interface Esp32ImuReading {
+  accel_x: number | null;
+  accel_y: number | null;
+  accel_z: number | null;
+  lin_accel_x?: number | null;
+  lin_accel_y?: number | null;
+  lin_accel_z?: number | null;
+  gyro_x: number | null;
+  gyro_y: number | null;
+  gyro_z: number | null;
+  roll?: number | null;
+  pitch?: number | null;
+  yaw?: number | null;
+  unit_acceleration: string;
+  unit_angular_velocity: string;
+  sensor_timestamp_ms?: number;
+  status: SensorConnectionState;
+}
+
+export interface Esp32FuelReading {
+  distance_cm: number | null;
+  raw_distance_cm?: number | null;
+  level_percent: number | null;
+  volume_litres: number | null;
+  low_fuel_warning: boolean;
+  status: SensorConnectionState;
+  error_message?: string | null;
+}
+
+export interface DetectedDrivingEventRecord {
+  id: string;
+  device_id: string;
+  vehicle_id?: string;
+  type: Exclude<DrivingEventState, 'normal'>;
+  severity: 'low' | 'medium' | 'high' | 'critical';
+  timestamp: string;
+  peak_accel_mps2: number;
+  peak_gyro_dps: number;
+  axis_label: string;
+  duration_ms: number;
+  detector_type: 'THRESHOLD_PROTOTYPE' | 'ESP32_EDGE_THRESHOLD';
+  orientation_calibrated: boolean;
+  notes: string;
+}
+
+export interface Esp32TelemetryPayload {
+  device_id: string;
+  vehicle_id?: string;
+  timestamp: string;
+  received_at?: string;
+  sequence_id?: number;
+  wifi_rssi_dbm?: number | null;
+  ip_address?: string;
+  is_simulated?: boolean;
+  imu: Esp32ImuReading;
+  fuel: Esp32FuelReading;
+  events: {
+    driving_state: DrivingEventState;
+    latest_event: DetectedDrivingEventRecord | null;
+    detector_mode: 'THRESHOLD_PROTOTYPE';
+    orientation_calibrated: boolean;
+  };
+}
+
