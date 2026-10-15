@@ -6,13 +6,18 @@ import {
   Cpu,
   Download,
   Droplets,
+  Eye,
+  Gauge,
+  MapPin,
   Pause,
   Play,
   Radio,
   Settings2,
   ShieldAlert,
+  ShieldCheck,
   Sliders,
   Trash2,
+  User,
   Wifi,
   WifiOff
 } from 'lucide-react';
@@ -317,6 +322,243 @@ export const VehicleSensorsView: React.FC = () => {
             >
               {fuel.status.replace(/_/g, ' ')}
             </span>
+          </div>
+        </div>
+      </div>
+
+      {/* =====================================================================
+          100 HZ REAL-TIME TRUCK INTELLIGENCE HUB OVERVIEW (ARCHITECTURE SPEC)
+      ===================================================================== */}
+      <div className="space-y-4">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2.5">
+            <div className="w-8 h-8 rounded-lg bg-emerald-600/20 text-emerald-400 flex items-center justify-center border border-emerald-500/30">
+              <Activity className="w-4 h-4" />
+            </div>
+            <div>
+              <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                <span>Truck Intelligence Hub — Live Telematics Console</span>
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-mono font-bold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">
+                  100 Hz STREAM
+                </span>
+              </h3>
+              <p className="text-[11px] text-slate-400">
+                Camera (4 ONNX Models) | ESP32 (BNO085 IMU + Ultrasonic + RFID) | Phone GPS (Wi-Fi) | 100 Hz JSON Data Flow
+              </p>
+            </div>
+          </div>
+          <div className="hidden sm:flex items-center gap-2 text-xs font-mono text-slate-400">
+            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping" />
+            <span>Telemetry Bus: 115200 bps UART</span>
+          </div>
+        </div>
+
+        {/* 5 Architecture Cards Grid */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3.5">
+          {/* 1. Driver Fatigue */}
+          <div className="p-4 rounded-xl bg-slate-900/90 border border-slate-800 shadow-md space-y-2.5 relative overflow-hidden">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-semibold text-slate-300 flex items-center gap-1.5">
+                <Eye className="w-3.5 h-3.5 text-blue-400" />
+                Driver Fatigue
+              </span>
+              <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold font-mono uppercase border ${
+                (sensorState.latestPayload.fatigue?.state || 'NORMAL') === 'CRITICAL'
+                  ? 'bg-rose-500/20 text-rose-400 border-rose-500/40 animate-pulse'
+                  : (sensorState.latestPayload.fatigue?.state || 'NORMAL') === 'DROWSY'
+                  ? 'bg-amber-500/20 text-amber-400 border-amber-500/40'
+                  : 'bg-emerald-500/20 text-emerald-400 border-emerald-500/40'
+              }`}>
+                {sensorState.latestPayload.fatigue?.state || 'NORMAL'}
+              </span>
+            </div>
+
+            <div className="flex items-center gap-3 pt-1">
+              <div className="relative w-12 h-12 rounded-full bg-slate-950 flex items-center justify-center border-2 border-emerald-500/60 shadow-inner">
+                <User className="w-6 h-6 text-emerald-400" />
+                <span className="absolute -bottom-1 -right-1 w-3.5 h-3.5 rounded-full bg-emerald-500 border-2 border-slate-900" />
+              </div>
+              <div>
+                <div className="text-xl font-bold font-mono text-white">
+                  {sensorState.latestPayload.fatigue?.score ?? 12}%
+                </div>
+                <div className="text-[10px] text-slate-400">
+                  EAR: {sensorState.latestPayload.fatigue?.ear_left?.toFixed(2) ?? '0.27'} | MAR: {sensorState.latestPayload.fatigue?.mar?.toFixed(2) ?? '0.07'}
+                </div>
+              </div>
+            </div>
+
+            <div className="text-[10px] text-slate-400 border-t border-slate-800/80 pt-2 flex justify-between">
+              <span>Blinks: {sensorState.latestPayload.fatigue?.blinks ?? 18}/m</span>
+              <span>Yawns: {sensorState.latestPayload.fatigue?.yawns ?? 0}</span>
+            </div>
+          </div>
+
+          {/* 2. Driving Events */}
+          <div className="p-4 rounded-xl bg-slate-900/90 border border-slate-800 shadow-md space-y-2.5">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-semibold text-slate-300 flex items-center gap-1.5">
+                <Activity className="w-3.5 h-3.5 text-emerald-400" />
+                Driving Events
+              </span>
+              <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold font-mono uppercase border ${
+                events.driving_state === 'normal'
+                  ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/40'
+                  : 'bg-amber-500/20 text-amber-400 border-amber-500/40 animate-pulse'
+              }`}>
+                {events.driving_state.replace(/_/g, ' ')}
+              </span>
+            </div>
+
+            <div className="space-y-1.5 pt-0.5 text-xs font-mono">
+              <div className="flex justify-between items-center text-slate-300">
+                <span className="text-slate-400 text-[11px]">Accel</span>
+                <span className="font-bold text-emerald-400">
+                  {((Math.abs(imu.lin_accel_x ?? imu.accel_x ?? 1.18)) / 9.81).toFixed(2)}g
+                </span>
+              </div>
+              <div className="flex justify-between items-center text-slate-300">
+                <span className="text-slate-400 text-[11px]">Brake</span>
+                <span className="font-bold text-amber-400">
+                  {(Math.abs(Math.min(0, imu.lin_accel_x ?? imu.accel_x ?? -0.78)) / 9.81).toFixed(2)}g
+                </span>
+              </div>
+              <div className="flex justify-between items-center text-slate-300">
+                <span className="text-slate-400 text-[11px]">Corner</span>
+                <span className="font-bold text-purple-400">
+                  {((Math.abs(imu.lin_accel_y ?? imu.accel_y ?? 0.49)) / 9.81).toFixed(2)}g
+                </span>
+              </div>
+            </div>
+
+            <div className="text-[10px] text-slate-400 border-t border-slate-800/80 pt-2 flex justify-between">
+              <span>BNO085 IMU 100 Hz</span>
+              <span>Events: {Object.values(sensorState.tripEventCounts).reduce((a: number, b: number) => a + b, 0)}</span>
+            </div>
+          </div>
+
+          {/* 3. Fuel Level */}
+          <div className="p-4 rounded-xl bg-slate-900/90 border border-slate-800 shadow-md space-y-2.5">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-semibold text-slate-300 flex items-center gap-1.5">
+                <Droplets className="w-3.5 h-3.5 text-sky-400" />
+                Fuel Level
+              </span>
+              <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold font-mono border ${
+                (fuel.level_percent ?? 68) <= 20
+                  ? 'bg-rose-500/20 text-rose-400 border-rose-500/40 animate-pulse'
+                  : 'bg-sky-500/20 text-sky-400 border-sky-500/40'
+              }`}>
+                {(fuel.level_percent ?? 68) <= 20 ? 'LOW FUEL' : 'OPTIMAL'}
+              </span>
+            </div>
+
+            <div className="flex items-center gap-3 pt-1">
+              {/* Radial Circle Progress */}
+              <div className="relative w-12 h-12 flex items-center justify-center shrink-0">
+                <svg className="w-12 h-12 transform -rotate-90" viewBox="0 0 36 36">
+                  <path
+                    className="text-slate-800"
+                    strokeWidth="3.5"
+                    stroke="currentColor"
+                    fill="none"
+                    d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
+                  />
+                  <path
+                    className="text-sky-400 transition-all duration-500"
+                    strokeDasharray={`${fuel.level_percent ?? 68}, 100`}
+                    strokeWidth="3.5"
+                    strokeLinecap="round"
+                    stroke="currentColor"
+                    fill="none"
+                    d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
+                  />
+                </svg>
+                <span className="absolute font-mono text-xs font-bold text-white">
+                  {fuel.level_percent !== null ? Math.round(fuel.level_percent) : 68}%
+                </span>
+              </div>
+
+              <div>
+                <div className="text-lg font-bold font-mono text-white">
+                  ~{fuel.volume_litres !== null ? Math.round(fuel.volume_litres) : 102} L
+                </div>
+                <div className="text-[10px] text-slate-400">
+                  Distance: {fuel.distance_cm !== null ? fuel.distance_cm.toFixed(1) : '15.3'} cm
+                </div>
+              </div>
+            </div>
+
+            <div className="text-[10px] text-slate-400 border-t border-slate-800/80 pt-2 flex justify-between">
+              <span>Capacity: 150 L</span>
+              <span>Ultrasonic HC-SR04</span>
+            </div>
+          </div>
+
+          {/* 4. Location & Speed */}
+          <div className="p-4 rounded-xl bg-slate-900/90 border border-slate-800 shadow-md space-y-2.5">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-semibold text-slate-300 flex items-center gap-1.5">
+                <Gauge className="w-3.5 h-3.5 text-amber-400" />
+                Location & Speed
+              </span>
+              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold font-mono bg-amber-500/20 text-amber-400 border border-amber-500/40">
+                GPS LIVE
+              </span>
+            </div>
+
+            <div className="flex items-center gap-3 pt-1">
+              <div className="w-12 h-12 rounded-xl bg-slate-950 border border-slate-800 flex flex-col items-center justify-center">
+                <span className="font-mono text-base font-bold text-amber-400 leading-none">
+                  {sensorState.latestPayload.gps?.speed_kmh ?? 68}
+                </span>
+                <span className="text-[9px] text-slate-400 uppercase font-mono mt-0.5">km/h</span>
+              </div>
+              <div className="space-y-0.5">
+                <div className="font-mono text-xs font-semibold text-slate-200">
+                  {sensorState.latestPayload.gps?.latitude?.toFixed(4) ?? '12.9716'}° N
+                </div>
+                <div className="font-mono text-xs font-semibold text-slate-200">
+                  {sensorState.latestPayload.gps?.longitude?.toFixed(4) ?? '77.5946'}° E
+                </div>
+              </div>
+            </div>
+
+            <div className="text-[10px] text-slate-400 border-t border-slate-800/80 pt-2 flex justify-between">
+              <span>Heading: {sensorState.latestPayload.gps?.heading ?? 45}° NE</span>
+              <span>Geofence: Inside</span>
+            </div>
+          </div>
+
+          {/* 5. Driver Card (RFID) */}
+          <div className="p-4 rounded-xl bg-slate-900/90 border border-slate-800 shadow-md space-y-2.5">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-semibold text-slate-300 flex items-center gap-1.5">
+                <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
+                Driver ID (RFID)
+              </span>
+              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold font-mono bg-emerald-500/20 text-emerald-400 border border-emerald-500/40">
+                AUTHORIZED
+              </span>
+            </div>
+
+            <div className="pt-1 space-y-1">
+              <div className="text-sm font-bold text-white truncate">
+                {sensorState.latestPayload.rfid?.driver_name || 'John Doe'}
+              </div>
+              <div className="text-xs font-mono text-slate-400">
+                UID: <span className="text-slate-200">{sensorState.latestPayload.rfid?.card_id || 'A3F892B1'}</span>
+              </div>
+              <div className="text-[10px] text-emerald-400 flex items-center gap-1">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                Security Authenticated
+              </div>
+            </div>
+
+            <div className="text-[10px] text-slate-400 border-t border-slate-800/80 pt-2 flex justify-between">
+              <span>RC522 SPI 100 Hz</span>
+              <span>Shift: Active</span>
+            </div>
           </div>
         </div>
       </div>

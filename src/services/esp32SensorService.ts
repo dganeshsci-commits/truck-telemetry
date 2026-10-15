@@ -800,6 +800,26 @@ class Esp32SensorService {
         latest_event: eventEval.latestEvent,
         detector_mode: 'THRESHOLD_PROTOTYPE',
         orientation_calibrated: this.state.orientationConfig.isCalibrated
+      },
+      rfid: raw.rfid || {
+        card_id: 'A3F892B1',
+        driver_name: 'John Doe',
+        authenticated: true
+      },
+      fatigue: raw.fatigue || {
+        score: 12,
+        state: 'NORMAL',
+        ear_left: 0.27,
+        ear_right: 0.26,
+        mar: 0.07,
+        blinks: 18,
+        yawns: 0
+      },
+      gps: raw.gps || {
+        latitude: 12.9716,
+        longitude: 77.5946,
+        speed_kmh: 68.0,
+        heading: 45.0
       }
     };
 

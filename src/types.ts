@@ -446,5 +446,25 @@ export interface Esp32TelemetryPayload {
     detector_mode: 'THRESHOLD_PROTOTYPE';
     orientation_calibrated: boolean;
   };
+  rfid?: {
+    card_id: string;
+    driver_name: string;
+    authenticated: boolean;
+  };
+  fatigue?: {
+    score: number;
+    state: string;
+    ear_left: number;
+    ear_right: number;
+    mar: number;
+    blinks?: number;
+    yawns?: number;
+  };
+  gps?: {
+    latitude: number;
+    longitude: number;
+    speed_kmh: number;
+    heading: number;
+  };
 }
 

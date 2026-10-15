@@ -124,8 +124,8 @@ class ClientVisionEngine {
     if (this.isModelLoading || this.modelsLoaded || typeof window === 'undefined') return;
     this.isModelLoading = true;
     try {
-      // Load matching ONNX Runtime WebAssembly binaries from local /ort-wasm/ directory
-      ort.env.wasm.wasmPaths = '/ort-wasm/';
+      // Load ONNX Runtime WebAssembly binaries from CDN to prevent Vite dev-server /public import conflicts
+      ort.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.21.0/dist/';
       ort.env.wasm.numThreads = 1;
 
       const [faceSession, pfldSession, mouthSession] = await Promise.all([
