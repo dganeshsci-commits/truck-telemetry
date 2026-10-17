@@ -317,6 +317,7 @@ export interface FuelTelemetryPoint {
 
 export type ActiveNavTab =
   | 'dashboard'
+  | 'intelligence'
   | 'fleet'
   | 'drivers'
   | 'geofencing'
@@ -466,5 +467,165 @@ export interface Esp32TelemetryPayload {
     speed_kmh: number;
     heading: number;
   };
+}
+
+// -----------------------------------------------------------------------------
+// Section 10: Standard JSON Telemetry Schema (100 Hz Unified Data Flow)
+// -----------------------------------------------------------------------------
+export interface TelemetryTripState {
+  status: 'idle' | 'started' | 'ended';
+  distance_km: number;
+  duration_seconds: number;
+  avg_speed_kmh: number;
+  max_speed_kmh: number;
+  idle_time_seconds: number;
+}
+
+export interface TelemetryGpsState {
+  latitude: number | null;
+  longitude: number | null;
+  speed_kmh: number | null;
+  heading: number | null;
+  altitude_m: number | null;
+  fix_status: 'NO_FIX' | '2D_FIX' | '3D_FIX' | 'DGPS_FIX';
+  satellites: number;
+  accuracy_m: number | null;
+  geofence_status: 'INSIDE_ROUTE_CORRIDOR' | 'OUTSIDE_GEOFENCE' | 'INSIDE_DEPOT' | 'DEVIATION_ALERT';
+  timestamp: string | null;
+  freshness_ms: number | null;
+  is_stale: boolean;
+}
+
+export interface TelemetryQuaternion {
+  w: number;
+  x: number;
+  y: number;
+  z: number;
+}
+
+export interface TelemetryVector3D {
+  x: number;
+  y: number;
+  z: number;
+}
+
+export interface TelemetryImuState {
+  accel_x: number | null;
+  accel_y: number | null;
+  accel_z: number | null;
+  lin_accel_x: number | null;
+  lin_accel_y: number | null;
+  lin_accel_z: number | null;
+  gyro_x: number | null;
+  gyro_y: number | null;
+  gyro_z: number | null;
+  roll: number | null;
+  pitch: number | null;
+  yaw: number | null;
+  quaternion: TelemetryQuaternion | null;
+  gravity_vector: TelemetryVector3D | null;
+  calibration_status: 'UNCALIBRATED' | 'CALIBRATING' | 'CALIBRATED';
+  connection_status: SensorConnectionState;
+  freshness_ms: number | null;
+  is_stale: boolean;
+}
+
+export interface TelemetryFuelState {
+  distance_cm: number | null;
+  level_percent: number | null;
+  volume_litres: number | null;
+  low_fuel_warning: boolean;
+  status: SensorConnectionState;
+  freshness_ms: number | null;
+  is_stale: boolean;
+}
+
+export interface TelemetryRfidState {
+  driver_id: string;
+  card_id: string;
+  driver_name: string;
+  authenticated: boolean;
+  shift_status: 'OFF_DUTY' | 'ON_DUTY' | 'RESTING';
+  safety_score: number;
+  last_scan_timestamp: string;
+}
+
+export interface TelemetryFatigueModels {
+  face_detection: {
+    detected: boolean;
+    box: [number, number, number, number];
+    confidence: number;
+  };
+  eye_state: {
+    left_eye: 'open' | 'closed' | 'unknown';
+    right_eye: 'open' | 'closed' | 'unknown';
+    ear_left: number;
+    ear_right: number;
+    perclos: number;
+  };
+  mouth_state: {
+    status: 'normal' | 'open' | 'yawn';
+    mar: number;
+    yawn_detected: boolean;
+    yawn_count: number;
+  };
+  head_pose: {
+    yaw: number;
+    pitch: number;
+    roll: number;
+    looking_away: boolean;
+  };
+}
+
+export interface TelemetryFatigueState {
+  overall_status: 'NORMAL' | 'ATTENTION' | 'DROWSY' | 'CRITICAL';
+  fatigue_score: number;
+  confidence: number;
+  models: TelemetryFatigueModels;
+  inference_latency_ms: number;
+  fps: number;
+  camera_status: 'connected' | 'disconnected' | 'error';
+  last_inference_time: string;
+}
+
+export interface TelemetryDrivingState {
+  state: DrivingEventState;
+  latest_event: DetectedDrivingEventRecord | null;
+  detector_mode: 'THRESHOLD_PROTOTYPE' | 'ONNX_MODEL';
+  trip_event_counts: Record<Exclude<DrivingEventState, 'normal'>, number>;
+}
+
+export interface TelemetrySystemHealth {
+  cpu_usage_percent: number;
+  memory_usage_percent: number;
+  disk_usage_percent: number;
+  cpu_temperature_c: number;
+  uptime_seconds: number;
+  network: {
+    interface: string;
+    ip: string;
+    signal_dbm: number | null;
+  };
+}
+
+export interface TelemetryPipelineStats {
+  publishing_rate_hz: number;
+  dropped_messages: number;
+  network_latency_ms: number;
+}
+
+export interface StandardTelemetryPayload {
+  timestamp: string;
+  device_id: string;
+  vehicle_id: string;
+  trip: TelemetryTripState;
+  gps: TelemetryGpsState;
+  imu: TelemetryImuState;
+  fuel: TelemetryFuelState;
+  rfid: TelemetryRfidState;
+  fatigue: TelemetryFatigueState;
+  driving: TelemetryDrivingState;
+  system: TelemetrySystemHealth;
+  telemetry: TelemetryPipelineStats;
 }
 

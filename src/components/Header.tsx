@@ -46,6 +46,8 @@ export const Header: React.FC<HeaderProps> = ({
     switch (activeTab) {
       case 'dashboard':
         return { title: 'Fleet Overview', subtitle: 'Live logistics operations & fleet telemetry' };
+      case 'intelligence':
+        return { title: 'Live Vehicle Intelligence', subtitle: '100 Hz Unified Raspberry Pi 5 & ESP32 Telemetry Engine' };
       case 'fleet':
         return { title: 'Fleet Management', subtitle: 'Real-time vehicle tracking, status & telemetry' };
       case 'drivers':

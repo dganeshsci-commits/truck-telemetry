@@ -42,6 +42,7 @@ import { NotificationsView } from './views/NotificationsView';
 import { SettingsView } from './views/SettingsView';
 import { DriverMonitoringView } from './views/DriverMonitoringView';
 import { VehicleSensorsView } from './views/VehicleSensorsView';
+import { LiveVehicleIntelligenceView } from './views/LiveVehicleIntelligenceView';
 import { driverMonitoringService } from './services/driverMonitoring';
 import { esp32SensorService } from './services/esp32SensorService';
 
@@ -635,6 +636,10 @@ export default function App() {
                 setActiveTab('fuel');
               }}
             />
+          )}
+
+          {activeTab === 'intelligence' && (
+            <LiveVehicleIntelligenceView onNotifyToast={handleNotifyToast} />
           )}
 
           {activeTab === 'fleet' && (
